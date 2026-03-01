@@ -1,0 +1,22 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["typescript"],
+  "rules": {
+    "typescript/await-thenable": "error",
+    "typescript/no-floating-promises": "error",
+    "typescript/no-misused-promises": "error",
+    "typescript/switch-exhaustiveness-check": "error",
+    "typescript/return-await": "error",
+    "typescript/no-unnecessary-type-assertion": "error",
+    "typescript/only-throw-error": "error",
+    "eslint/no-unused-vars": "error",
+    "eslint/no-console": "error"
+  },
+  "ignorePatterns": [
+    "**/dist",
+    "**/build",
+    "**/vitest.config.ts",
+    "**/setupTests.ts",
+    "**/vitest.shared.ts"
+  ]
+}

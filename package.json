@@ -1,0 +1,41 @@
+{
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.30.3",
+  "engines": {
+    "node": "22.14.0",
+    "pnpm": "10.30.3"
+  },
+  "scripts": {
+    "check": "tsc -b",
+    "lint": "oxlint --tsconfig tsconfig.json --type-aware --quiet",
+    "lint:fix": "oxlint --fix --tsconfig tsconfig.json --type-aware --quiet",
+    "format": "dprint fmt",
+    "format:check": "dprint check",
+    "test": "vitest run",
+    "dev:server": "pnpm --filter @app/server dev",
+    "dev:client": "pnpm --filter @app/client dev"
+  },
+  "devDependencies": {
+    "@effect/vitest": "4.0.0-beta.18",
+    "@types/node": "^22.8.5",
+    "dprint": "^0.48.0",
+    "oxlint": "^1.23.0",
+    "tsx": "^4.19.2",
+    "typescript": "5.9.3",
+    "vitest": "3.2.4"
+  },
+  "pnpm": {
+    "overrides": {
+      "effect": "4.0.0-beta.18",
+      "@effect/platform-browser": "4.0.0-beta.18",
+      "@effect/platform-node": "4.0.0-beta.18",
+      "@effect/sql-pg": "4.0.0-beta.18",
+      "@effect/vitest": "4.0.0-beta.18",
+      "@effect/atom-react": "4.0.0-beta.18"
+    },
+    "onlyBuiltDependencies": [
+      "dprint"
+    ]
+  }
+}
