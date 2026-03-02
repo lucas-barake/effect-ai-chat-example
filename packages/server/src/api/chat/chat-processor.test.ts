@@ -5,7 +5,7 @@ import type { Done } from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
-import { ChatProcessor } from "./chat-processor.js";
+import { ChatProcessor, makePrompt } from "./chat-processor.js";
 import { HandlersLive } from "./chat-toolkit-live.js";
 import { ChatMailbox } from "./chat-toolkit.js";
 import { JokeApi } from "./joke-api.js";
@@ -30,6 +30,74 @@ const TestHandlers = HandlersLive.pipe(
 );
 
 const userMessage = (content: string): Chat.Message => ({ role: "user", content });
+
+describe("makePrompt", () => {
+  it("empty messages returns only system message", () => {
+    const result = makePrompt([]);
+    expect(result).toHaveLength(1);
+    expect(result[0]!.role).toBe("system");
+  });
+
+  it("user string message forwarded verbatim", () => {
+    const result = makePrompt([{ role: "user", content: "hello" }]);
+    expect(result).toHaveLength(2);
+    expect(result[1]).toEqual({ role: "user", content: "hello" });
+  });
+
+  it("user array message maps text parts", () => {
+    const result = makePrompt([{ role: "user", content: [{ type: "text", text: "hello" }] }]);
+    expect(result).toHaveLength(2);
+    expect(result[1]).toEqual({ role: "user", content: [{ type: "text", text: "hello" }] });
+  });
+
+  it("assistant string message wrapped in text array", () => {
+    const result = makePrompt([{ role: "assistant", content: "reply" }]);
+    expect(result).toHaveLength(2);
+    expect(result[1]).toEqual({ role: "assistant", content: [{ type: "text", text: "reply" }] });
+  });
+
+  it("assistant array with text and tool-call parts forwarded", () => {
+    const result = makePrompt([{
+      role: "assistant",
+      content: [
+        { type: "text", text: "Using tool" },
+        { type: "tool-call", id: "c1", name: "getCurrentDateTime", params: {} },
+      ],
+    }]);
+    expect(result).toHaveLength(2);
+    expect(result[1]).toEqual({
+      role: "assistant",
+      content: [
+        { type: "text", text: "Using tool" },
+        { type: "tool-call", id: "c1", name: "getCurrentDateTime", params: {} },
+      ],
+    });
+  });
+
+  it("tool message forwarded", () => {
+    const result = makePrompt([{
+      role: "tool",
+      content: [{
+        type: "tool-result",
+        id: "c1",
+        name: "getCurrentDateTime",
+        result: "2024-01-01T00:00:00Z",
+        isFailure: false,
+      }],
+    }]);
+    expect(result).toHaveLength(2);
+    expect(result[1]).toEqual({
+      role: "tool",
+      content: [{
+        type: "tool-result",
+        id: "c1",
+        name: "getCurrentDateTime",
+        result: "2024-01-01T00:00:00Z",
+        isFailure: false,
+      }],
+    });
+  });
+});
 
 describe("ChatProcessor", () => {
   it.effect("text-delta parts become Chunk mailbox events", () =>

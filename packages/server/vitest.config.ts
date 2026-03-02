@@ -6,6 +6,7 @@ export default mergeConfig(shared, {
   test: {
     alias: {
       "@test/": path.join(__dirname, "test") + "/",
+      "@/": path.join(__dirname, "src") + "/",
     },
   },
 });

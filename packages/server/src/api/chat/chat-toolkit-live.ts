@@ -12,77 +12,74 @@ export const HandlersLive = ChatToolkit.toLayer(
     const jokeApi = yield* JokeApi;
 
     return {
-      getCurrentDateTime: () =>
-        Effect.gen(function*() {
-          const mailbox = yield* ChatMailbox;
+      getCurrentDateTime: Effect.fnUntraced(function*() {
+        const mailbox = yield* ChatMailbox;
 
-          yield* Queue.offer(mailbox, {
-            _tag: "ToolStart",
-            toolName: "getCurrentDateTime",
-            input: "{}",
-          });
+        yield* Queue.offer(mailbox, {
+          _tag: "ToolStart",
+          toolName: "getCurrentDateTime",
+          input: "{}",
+        });
 
-          const now = yield* DateTime.now;
-          const formatted = DateTime.formatIso(now);
+        const now = yield* DateTime.now;
+        const formatted = DateTime.formatIso(now);
 
-          yield* Queue.offer(mailbox, {
-            _tag: "ToolSuccess",
-            toolName: "getCurrentDateTime",
-            output: formatted,
-          });
+        yield* Queue.offer(mailbox, {
+          _tag: "ToolSuccess",
+          toolName: "getCurrentDateTime",
+          output: formatted,
+        });
 
-          return formatted;
-        }),
+        return formatted;
+      }),
 
-      getWeather: (params) =>
-        Effect.gen(function*() {
-          const mailbox = yield* ChatMailbox;
+      getWeather: Effect.fnUntraced(function*(params) {
+        const mailbox = yield* ChatMailbox;
 
-          yield* Queue.offer(mailbox, {
-            _tag: "ToolStart",
-            toolName: "getWeather",
-            input: JSON.stringify(params),
-          });
+        yield* Queue.offer(mailbox, {
+          _tag: "ToolStart",
+          toolName: "getWeather",
+          input: JSON.stringify(params),
+        });
 
-          const result = yield* weatherApi.getForecast(params).pipe(
-            Effect.tapError(() =>
-              Queue.offer(mailbox, { _tag: "ToolFailure", toolName: "getWeather" })
-            ),
-          );
+        const result = yield* weatherApi.getForecast(params).pipe(
+          Effect.tapError(() =>
+            Queue.offer(mailbox, { _tag: "ToolFailure", toolName: "getWeather" })
+          ),
+        );
 
-          yield* Queue.offer(mailbox, {
-            _tag: "ToolSuccess",
-            toolName: "getWeather",
-            output: result,
-          });
+        yield* Queue.offer(mailbox, {
+          _tag: "ToolSuccess",
+          toolName: "getWeather",
+          output: result,
+        });
 
-          return result;
-        }),
+        return result;
+      }),
 
-      fetchRandomJoke: () =>
-        Effect.gen(function*() {
-          const mailbox = yield* ChatMailbox;
+      fetchRandomJoke: Effect.fnUntraced(function*() {
+        const mailbox = yield* ChatMailbox;
 
-          yield* Queue.offer(mailbox, {
-            _tag: "ToolStart",
-            toolName: "fetchRandomJoke",
-            input: "{}",
-          });
+        yield* Queue.offer(mailbox, {
+          _tag: "ToolStart",
+          toolName: "fetchRandomJoke",
+          input: "{}",
+        });
 
-          const joke = yield* jokeApi.fetchRandom().pipe(
-            Effect.tapError(() =>
-              Queue.offer(mailbox, { _tag: "ToolFailure", toolName: "fetchRandomJoke" })
-            ),
-          );
+        const joke = yield* jokeApi.fetchRandom().pipe(
+          Effect.tapError(() =>
+            Queue.offer(mailbox, { _tag: "ToolFailure", toolName: "fetchRandomJoke" })
+          ),
+        );
 
-          yield* Queue.offer(mailbox, {
-            _tag: "ToolSuccess",
-            toolName: "fetchRandomJoke",
-            output: joke,
-          });
+        yield* Queue.offer(mailbox, {
+          _tag: "ToolSuccess",
+          toolName: "fetchRandomJoke",
+          output: joke,
+        });
 
-          return joke;
-        }),
+        return joke;
+      }),
     };
   }),
 );

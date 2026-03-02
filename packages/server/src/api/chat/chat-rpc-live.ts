@@ -14,27 +14,26 @@ export const ChatRpcHandler = Chat.ChatRpc.toLayer(
     const aiModels = yield* AiModels;
 
     return Chat.ChatRpc.of({
-      chat_ask: (payload) =>
-        Effect.gen(function*() {
-          const mailbox = yield* Queue.make<Chat.MessageEvent, Done>();
+      chat_ask: Effect.fnUntraced(function*(payload) {
+        const mailbox = yield* Queue.make<Chat.MessageEvent, Done>();
 
-          yield* Effect.gen(function*() {
-            const processor = yield* ChatProcessor;
-            yield* processor.run(payload.messages);
-          }).pipe(
-            aiModels.use(payload.model),
-            Effect.catchTags({
-              AiError: (e) => Effect.die(e),
-            }),
-            Effect.ensuring(Queue.end(mailbox)),
-            Effect.provide(ChatProcessor.layer),
-            Effect.provide(ChatToolkitLive),
-            Effect.provideService(ChatMailbox, mailbox),
-            Effect.forkScoped,
-          );
+        yield* Effect.gen(function*() {
+          const processor = yield* ChatProcessor;
+          yield* processor.run(payload.messages);
+        }).pipe(
+          aiModels.use(payload.model),
+          Effect.catchTags({
+            AiError: (e) => Queue.offer(mailbox, { _tag: "Error", message: e.message }),
+          }),
+          Effect.ensuring(Queue.end(mailbox)),
+          Effect.provide(ChatProcessor.layer),
+          Effect.provide(ChatToolkitLive),
+          Effect.provideService(ChatMailbox, mailbox),
+          Effect.forkScoped,
+        );
 
-          return mailbox;
-        }),
+        return mailbox;
+      }),
     });
   }),
 );

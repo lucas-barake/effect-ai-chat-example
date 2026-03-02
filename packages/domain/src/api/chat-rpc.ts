@@ -49,6 +49,7 @@ const MessageEvent = Schema.Union([
   Schema.TaggedStruct("ToolStart", { toolName: ToolName, input: Schema.String }),
   Schema.TaggedStruct("ToolFailure", { toolName: ToolName }),
   Schema.TaggedStruct("ToolSuccess", { toolName: ToolName, output: Schema.String }),
+  Schema.TaggedStruct("Error", { message: Schema.String }),
 ]);
 export type MessageEvent = typeof MessageEvent.Type;
 

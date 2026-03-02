@@ -6,6 +6,7 @@ import { withLanguageModel } from "@test/utils/with-language-model.js";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
+import * as AiError from "effect/unstable/ai/AiError";
 import { RpcTest } from "effect/unstable/rpc";
 import { ChatRpcHandler } from "./chat-rpc-live.js";
 
@@ -16,8 +17,24 @@ const MockAiModels = Layer.mock(AiModels)({
     }),
 });
 
+const FailingAiModels = Layer.mock(AiModels)({
+  use: (_model) => (_effect) =>
+    Effect.fail(
+      new AiError.AiError({
+        module: "test",
+        method: "streamText",
+        reason: new AiError.RateLimitError({}),
+      }),
+    ) as any,
+});
+
 const TestLayer = Layer.mergeAll(
   ChatRpcHandler.pipe(Layer.provide(MockAiModels)),
+  AuthMiddlewareLive,
+);
+
+const FailingTestLayer = Layer.mergeAll(
+  ChatRpcHandler.pipe(Layer.provide(FailingAiModels)),
   AuthMiddlewareLive,
 );
 
@@ -34,4 +51,16 @@ describe("ChatRpc", () => {
       expect(events.some((e) => e._tag === "Chunk" && "delta" in e && e.delta === "Hello from AI"))
         .toBe(true);
     }).pipe(Effect.provide(TestLayer)));
+
+  it.effect("chat_ask emits Error event and stream ends when AI fails", () =>
+    Effect.gen(function*() {
+      const client = yield* RpcTest.makeClient(Chat.ChatRpc);
+
+      const events = yield* client.chat_ask({
+        messages: [{ role: "user", content: "Say hello" }],
+        model: "haiku-4.5",
+      }).pipe(Stream.runCollect);
+
+      expect(events.some((e) => e._tag === "Error")).toBe(true);
+    }).pipe(Effect.provide(FailingTestLayer)));
 });
