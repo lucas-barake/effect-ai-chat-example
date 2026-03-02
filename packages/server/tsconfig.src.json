@@ -9,6 +9,7 @@
     "tsBuildInfoFile": ".tsbuildinfo/src.tsbuildinfo",
     "rootDir": "src",
     "paths": {
+      "@/*": ["./src/*"],
       "@app/domain": ["../domain/src/index.js"],
       "@app/domain/*": ["../domain/src/*.js"]
     }

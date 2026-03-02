@@ -7,6 +7,8 @@
     "noEmit": true,
     "tsBuildInfoFile": ".tsbuildinfo/test.tsbuildinfo",
     "paths": {
+      "@/*": ["./src/*"],
+      "@test/*": ["./test/*"],
       "@app/domain": ["../domain/src/index.js"],
       "@app/domain/*": ["../domain/src/*.js"]
     }

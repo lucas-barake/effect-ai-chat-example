@@ -1,0 +1,28 @@
+import * as Schema from "effect/Schema";
+import * as ServiceMap from "effect/ServiceMap";
+import * as RpcMiddleware from "effect/unstable/rpc/RpcMiddleware";
+
+export const UserId = Schema.String.pipe(
+  Schema.check(Schema.isUUID(undefined)),
+  Schema.brand("UserId"),
+);
+export type UserId = typeof UserId.Type;
+
+export const CurrentUserSchema = Schema.Struct({
+  id: UserId,
+  name: Schema.String,
+  email: Schema.String,
+});
+
+export class CurrentUser extends ServiceMap.Service<CurrentUser, {
+  readonly id: UserId;
+  readonly name: string;
+  readonly email: string;
+}>()("CurrentUser") {}
+
+export class AuthMiddleware extends RpcMiddleware.Service<AuthMiddleware, {
+  provides: CurrentUser;
+}>()(
+  "AuthMiddleware",
+  { error: Schema.Never, requiredForClient: false },
+) {}

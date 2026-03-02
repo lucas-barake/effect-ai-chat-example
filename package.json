@@ -7,9 +7,7 @@
     "pnpm": "10.30.3"
   },
   "scripts": {
-    "check": "tsc -b",
-    "lint": "oxlint --tsconfig tsconfig.json --type-aware --quiet",
-    "lint:fix": "oxlint --fix --tsconfig tsconfig.json --type-aware --quiet",
+    "check": "dprint fmt && oxlint --fix --tsconfig tsconfig.json --type-aware --quiet && oxlint --tsconfig tsconfig.json --type-aware --quiet && tsc -b",
     "format": "dprint fmt",
     "format:check": "dprint check",
     "test": "vitest run",
@@ -17,10 +15,12 @@
     "dev:client": "pnpm --filter @app/client dev"
   },
   "devDependencies": {
+    "@app/scripts": "workspace:*",
     "@effect/vitest": "4.0.0-beta.18",
     "@types/node": "^22.8.5",
     "dprint": "^0.48.0",
     "oxlint": "^1.23.0",
+    "oxlint-tsgolint": "^0.15.0",
     "tsx": "^4.19.2",
     "typescript": "5.9.3",
     "vitest": "3.2.4"
@@ -32,7 +32,13 @@
       "@effect/platform-node": "4.0.0-beta.18",
       "@effect/sql-pg": "4.0.0-beta.18",
       "@effect/vitest": "4.0.0-beta.18",
-      "@effect/atom-react": "4.0.0-beta.18"
+      "@effect/atom-react": "4.0.0-beta.18",
+      "@effect/ai-anthropic": "4.0.0-beta.18",
+      "@effect/opentelemetry": "4.0.0-beta.18",
+      "@opentelemetry/sdk-trace-base": "2.0.0",
+      "@opentelemetry/sdk-trace-node": "2.0.0",
+      "@opentelemetry/semantic-conventions": "1.30.0",
+      "@opentelemetry/exporter-trace-otlp-http": "0.200.0"
     },
     "onlyBuiltDependencies": [
       "dprint"

@@ -11,5 +11,14 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
 
+  jaeger:
+    image: jaegertracing/all-in-one:1.64
+    container_name: effect-playground-jaeger
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686"
+      - "4318:4318"
+
 volumes:
   pgdata:

@@ -1,6 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
-import * as AsyncResult from "effect/unstable/reactivity/AsyncResult";
 import * as Cause from "effect/Cause";
+import * as AsyncResult from "effect/unstable/reactivity/AsyncResult";
 import { currentUserAtom } from "./atoms/current-user-atom.js";
 
 export function App() {
@@ -14,9 +14,15 @@ export function App() {
         .onSuccess((user) => (
           <div>
             <h2>Current User</h2>
-            <p><strong>ID:</strong> {user.id}</p>
-            <p><strong>Name:</strong> {user.name}</p>
-            <p><strong>Email:</strong> {user.email}</p>
+            <p>
+              <strong>ID:</strong> {user.id}
+            </p>
+            <p>
+              <strong>Name:</strong> {user.name}
+            </p>
+            <p>
+              <strong>Email:</strong> {user.email}
+            </p>
           </div>
         ))
         .onFailure((cause) => (

@@ -7,8 +7,16 @@
   },
   "dependencies": {
     "@app/domain": "workspace:^",
+    "@effect/opentelemetry": "*",
     "@effect/platform-node": "*",
     "@effect/sql-pg": "*",
+    "@opentelemetry/exporter-logs-otlp-http": "^0.210.0",
+    "@opentelemetry/exporter-trace-otlp-http": "^0.57.1",
+    "@opentelemetry/sdk-logs": "^0.210.0",
+    "@opentelemetry/sdk-trace-base": "*",
+    "@opentelemetry/sdk-trace-node": "*",
+    "@opentelemetry/semantic-conventions": "*",
+    "@effect/ai-anthropic": "*",
     "effect": "*"
   },
   "devDependencies": {

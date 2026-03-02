@@ -7,13 +7,18 @@
   },
   "dependencies": {
     "@app/domain": "workspace:^",
+    "@app/domain": "workspace:^",
     "@effect/atom-react": "*",
     "@effect/platform-browser": "*",
+    "@tanstack/react-router": "*",
     "effect": "*",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-aria-components": "^1.15.0",
+    "react-dom": "^19.0.0",
+    "virtua": "^0.43.0"
   },
   "devDependencies": {
+    "@tanstack/router-plugin": "*",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^4.3.0",
