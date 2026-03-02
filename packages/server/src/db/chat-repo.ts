@@ -1,0 +1,166 @@
+import * as Chat from "@app/domain/api/chat-rpc"
+import { ModelFamily } from "@app/domain/ai-models"
+import * as Effect from "effect/Effect"
+import * as Layer from "effect/Layer"
+import * as Option from "effect/Option"
+import * as Schema from "effect/Schema"
+import * as ServiceMap from "effect/ServiceMap"
+import { SqlClient } from "effect/unstable/sql/SqlClient"
+import { SqlSchema } from "effect/unstable/sql"
+import { ChatModel } from "./chat-model.js"
+import { PgLive } from "./pg-live.js"
+
+export class ChatRepo extends ServiceMap.Service<ChatRepo, {
+  readonly create: (args: {
+    readonly userId: string
+    readonly title: string
+    readonly model: typeof ModelFamily.Type
+  }) => Effect.Effect<typeof ChatModel.Type>
+  readonly findById: (
+    chatId: Chat.ChatId,
+    userId: string,
+  ) => Effect.Effect<typeof ChatModel.Type, Chat.ChatNotFoundError>
+  readonly listByUser: (
+    userId: string,
+    cursor: Option.Option<DateTime.Utc>,
+  ) => Effect.Effect<{ items: ReadonlyArray<typeof ChatModel.Type>; hasMore: boolean }>
+  readonly delete: (
+    chatId: Chat.ChatId,
+    userId: string,
+  ) => Effect.Effect<void, Chat.ChatNotFoundError>
+  readonly updateMessages: (args: {
+    readonly chatId: Chat.ChatId
+    readonly userId: string
+    readonly messages: ReadonlyArray<typeof Chat.Message.Type>
+  }) => Effect.Effect<void>
+}>()("ChatRepo", {
+  make: Effect.gen(function*() {
+    const sql = yield* SqlClient
+
+    const insertQuery = SqlSchema.findOne({
+      Request: ChatModel.insert,
+      Result: ChatModel,
+      execute: (req) => sql`INSERT INTO chats ${sql.insert(req).returning("*")}`,
+    })
+
+    const findByIdQuery = SqlSchema.findOneOption({
+      Request: Schema.Struct({ chatId: Chat.ChatId, userId: Schema.String }),
+      Result: ChatModel,
+      execute: ({ chatId, userId }) => sql`
+        SELECT * FROM chats
+        WHERE id = ${chatId} AND user_id = ${userId}
+      `,
+    })
+
+    const PAGE_SIZE = 50
+
+    const listQuery = SqlSchema.findAll({
+      Request: Schema.Struct({
+        userId: Schema.String,
+        cursor: Schema.NullOr(Schema.DateTimeUtcFromString),
+      }),
+      Result: ChatModel,
+      execute: ({ userId, cursor }) => sql`
+        SELECT * FROM chats
+        WHERE user_id = ${userId}
+          ${cursor !== null ? sql`AND updated_at < ${cursor}` : sql``}
+        ORDER BY updated_at DESC
+        LIMIT ${PAGE_SIZE + 1}
+      `,
+    })
+
+    const deleteQuery = SqlSchema.findOneOption({
+      Request: Schema.Struct({ chatId: Chat.ChatId, userId: Schema.String }),
+      Result: Schema.Struct({ id: Chat.ChatId }),
+      execute: ({ chatId, userId }) => sql`
+        DELETE FROM chats
+        WHERE id = ${chatId} AND user_id = ${userId}
+        RETURNING id
+      `,
+    })
+
+    const updateMessagesQuery = SqlSchema.void({
+      Request: Schema.Struct({
+        chatId: Chat.ChatId,
+        userId: Schema.String,
+        messages: Schema.fromJsonString(Schema.Array(Chat.Message)),
+      }),
+      execute: ({ chatId, userId, messages }) => sql`
+        UPDATE chats
+        SET messages = ${messages}, updated_at = NOW()
+        WHERE id = ${chatId} AND user_id = ${userId}
+      `,
+    })
+
+    return {
+      create: ({ userId, title, model }) =>
+        insertQuery({
+          userId,
+          title,
+          model,
+          messages: [],
+        }).pipe(
+          Effect.catchTags({
+            SchemaError: Effect.die,
+            SqlError: Effect.die,
+            NoSuchElementError: Effect.die,
+          }),
+        ),
+
+      findById: (chatId, userId) =>
+        findByIdQuery({ chatId, userId }).pipe(
+          Effect.catchTags({
+            SchemaError: Effect.die,
+            SqlError: Effect.die,
+          }),
+          Effect.flatMap(
+            Option.match({
+              onNone: () => Effect.fail(new Chat.ChatNotFoundError({ id: chatId })),
+              onSome: Effect.succeed,
+            }),
+          ),
+        ),
+
+      listByUser: (userId, cursor) =>
+        listQuery({
+          userId,
+          cursor: Option.getOrNull(cursor),
+        }).pipe(
+          Effect.catchTags({
+            SchemaError: Effect.die,
+            SqlError: Effect.die,
+          }),
+          Effect.map((rows) => ({
+            items: rows.slice(0, PAGE_SIZE),
+            hasMore: rows.length > PAGE_SIZE,
+          })),
+        ),
+
+      delete: (chatId, userId) =>
+        deleteQuery({ chatId, userId }).pipe(
+          Effect.catchTags({
+            SchemaError: Effect.die,
+            SqlError: Effect.die,
+          }),
+          Effect.flatMap(
+            Option.match({
+              onNone: () => Effect.fail(new Chat.ChatNotFoundError({ id: chatId })),
+              onSome: () => Effect.void,
+            }),
+          ),
+        ),
+
+      updateMessages: ({ chatId, userId, messages }) =>
+        updateMessagesQuery({ chatId, userId, messages }).pipe(
+          Effect.catchTags({
+            SchemaError: Effect.die,
+            SqlError: Effect.die,
+          }),
+        ),
+    }
+  }),
+}) {
+  static layer: Layer.Layer<ChatRepo> = Layer.effect(this, this.make).pipe(
+    Layer.provide(PgLive),
+  )
+}

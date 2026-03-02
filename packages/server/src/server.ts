@@ -9,6 +9,7 @@ import { createServer } from "node:http";
 import { AuthMiddlewareLive } from "./api/auth-middleware-live.js";
 import { ChatRpcLive } from "./api/chat/chat-rpc-live.js";
 import { UsersRpcLive } from "./api/users-rpc-live.js";
+import { MigrationLayer } from "./db/migrator.js";
 import { TracerLive } from "./lib/tracer.js";
 
 const RpcRouter = RpcServer.layerHttp({
@@ -31,6 +32,7 @@ const AllRoutes = Layer.mergeAll(RpcRouter).pipe(
 const ServerLayer = HttpRouter.serve(AllRoutes).pipe(
   Layer.provide(NodeHttpServer.layer(createServer, { port: 3000 })),
   Layer.provide(TracerLive),
+  Layer.provide(MigrationLayer),
   Layer.orDie,
 );
 

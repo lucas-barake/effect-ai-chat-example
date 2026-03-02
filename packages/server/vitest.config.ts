@@ -8,5 +8,6 @@ export default mergeConfig(shared, {
       "@test/": path.join(__dirname, "test") + "/",
       "@/": path.join(__dirname, "src") + "/",
     },
+    globalSetup: [path.join(__dirname, "test/global-setup.ts")],
   },
 });

@@ -1,47 +1,81 @@
-import * as Schema from "effect/Schema";
-import * as Rpc from "effect/unstable/rpc/Rpc";
-import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
-import { type ModelFamily } from "../ai-models.js";
-import { AuthMiddleware } from "../auth.js";
+import * as Schema from "effect/Schema"
+import * as Rpc from "effect/unstable/rpc/Rpc"
+import * as RpcGroup from "effect/unstable/rpc/RpcGroup"
+import { ModelFamily } from "../ai-models.js"
+import { AuthMiddleware } from "../auth.js"
 
-export const ToolName = Schema.Literals(["getCurrentDateTime", "getWeather", "fetchRandomJoke"]);
-export type ToolName = typeof ToolName.Type;
+export const ChatId = Schema.String.pipe(Schema.brand("ChatId"))
+export type ChatId = typeof ChatId.Type
+
+export class ChatNotFoundError extends Schema.TaggedErrorClass<ChatNotFoundError>()("ChatNotFoundError", {
+  id: ChatId,
+}) {}
+
+export const ReconciliationId = Schema.String.pipe(Schema.brand("ReconciliationId"))
+export type ReconciliationId = typeof ReconciliationId.Type
+
+export class GenerationInProgressError extends Schema.TaggedErrorClass<GenerationInProgressError>()(
+  "GenerationInProgressError",
+  { chatId: ChatId },
+) {}
+
+export const ToolName = Schema.Literals(["getCurrentDateTime", "getWeather", "fetchRandomJoke"])
+export type ToolName = typeof ToolName.Type
 
 export const ToolEvent = Schema.Union([
   Schema.TaggedStruct("ToolStart", { toolName: ToolName, input: Schema.String }),
   Schema.TaggedStruct("ToolFailure", { toolName: ToolName }),
   Schema.TaggedStruct("ToolSuccess", { toolName: ToolName, output: Schema.String }),
-]);
-export type ToolEvent = typeof ToolEvent.Type;
+])
+export type ToolEvent = typeof ToolEvent.Type
 
-const TextPart = Schema.Struct({ type: Schema.Literal("text"), text: Schema.String });
+const TextPart = Schema.Struct({ type: Schema.Literal("text"), text: Schema.String })
 const ToolCallPart = Schema.Struct({
   type: Schema.Literal("tool-call"),
   id: Schema.String,
   name: ToolName,
   params: Schema.Json,
-});
+})
 const ToolResultPart = Schema.Struct({
   type: Schema.Literal("tool-result"),
   id: Schema.String,
   name: ToolName,
   result: Schema.Json,
   isFailure: Schema.Boolean,
-});
-const MessagePart = Schema.Union([TextPart, ToolCallPart, ToolResultPart]);
-const MessageContent = Schema.Union([Schema.String, Schema.Array(MessagePart)]);
+})
+export const MessagePart = Schema.Union([TextPart, ToolCallPart, ToolResultPart])
+export type MessagePart = typeof MessagePart.Type
+const MessageContent = Schema.Union([Schema.String, Schema.Array(MessagePart)])
 
-export interface Message {
-  readonly role: "user" | "assistant" | "tool";
-  readonly content: typeof MessageContent.Type;
-}
-
-const MessageSchema: Schema.Codec<Message> = Schema.Struct({
+export class Message extends Schema.Opaque<Message>()(Schema.Struct({
   role: Schema.Literals(["user", "assistant", "tool"]),
   content: MessageContent,
-});
+})) {}
 
-export const Message = Schema.Opaque<Message>()(MessageSchema);
+export class Chat extends Schema.Opaque<Chat>()(Schema.Struct({
+  id: ChatId,
+  title: Schema.String,
+  model: ModelFamily,
+  createdAt: Schema.DateTimeUtcFromString,
+  updatedAt: Schema.DateTimeUtcFromString,
+})) {
+  static readonly WithMessages = class WithMessages extends Schema.Opaque<WithMessages>()(
+    Schema.Struct({ ...Chat.fields, messages: Schema.Array(Message) }),
+  ) {}
+}
+
+const ChatEvent = Schema.Union([
+  Schema.TaggedStruct("GenerationStarted", { reconciliationId: ReconciliationId }),
+  Schema.TaggedStruct("Chunk", { delta: Schema.String }),
+  Schema.TaggedStruct("ReasoningChunk", { delta: Schema.String }),
+  Schema.TaggedStruct("ToolStart", { toolName: ToolName, input: Schema.String }),
+  Schema.TaggedStruct("ToolFailure", { toolName: ToolName }),
+  Schema.TaggedStruct("ToolSuccess", { toolName: ToolName, output: Schema.String }),
+  Schema.TaggedStruct("Error", { message: Schema.String }),
+  Schema.TaggedStruct("Done", {}),
+  Schema.TaggedStruct("Interrupted", {}),
+])
+export type ChatEvent = typeof ChatEvent.Type
 
 const MessageEvent = Schema.Union([
   Schema.TaggedStruct("Chunk", { delta: Schema.String }),
@@ -50,16 +84,68 @@ const MessageEvent = Schema.Union([
   Schema.TaggedStruct("ToolFailure", { toolName: ToolName }),
   Schema.TaggedStruct("ToolSuccess", { toolName: ToolName, output: Schema.String }),
   Schema.TaggedStruct("Error", { message: Schema.String }),
-]);
-export type MessageEvent = typeof MessageEvent.Type;
+])
+export type MessageEvent = typeof MessageEvent.Type
 
-export class ChatAsk extends Rpc.make("chat_ask", {
-  stream: true,
+export class ChatAskRpc extends Rpc.make("chat_ask", {
   payload: {
-    messages: Schema.Array(Message),
-    model: Schema.Literals(["sonnet-4.6", "haiku-4.5"]) as Schema.Codec<ModelFamily>,
+    chatId: ChatId,
+    message: Schema.String,
+    reconciliationId: ReconciliationId,
   },
-  success: MessageEvent,
+  success: Schema.Void,
+  error: Schema.Union([ChatNotFoundError, GenerationInProgressError]),
 }) {}
 
-export class ChatRpc extends RpcGroup.make(ChatAsk).middleware(AuthMiddleware) {}
+export class ChatEventsRpc extends Rpc.make("chat_events", {
+  stream: true,
+  payload: { chatId: ChatId },
+  success: ChatEvent,
+  error: ChatNotFoundError,
+}) {}
+
+export class ChatCreateRpc extends Rpc.make("chat_create", {
+  payload: {
+    title: Schema.NonEmptyString,
+    model: ModelFamily,
+  },
+  success: Chat,
+}) {}
+
+export class ChatListRpc extends Rpc.make("chat_list", {
+  payload: {
+    cursor: Schema.NullOr(Schema.DateTimeUtcFromString),
+  },
+  success: Schema.Struct({
+    items: Schema.Array(Chat),
+    hasMore: Schema.Boolean,
+  }),
+}) {}
+
+export class ChatGetRpc extends Rpc.make("chat_get", {
+  payload: { chatId: ChatId },
+  success: Chat.WithMessages,
+  error: ChatNotFoundError,
+}) {}
+
+export class ChatDeleteRpc extends Rpc.make("chat_delete", {
+  payload: { chatId: ChatId },
+  success: Schema.Void,
+  error: ChatNotFoundError,
+}) {}
+
+export class ChatInterruptRpc extends Rpc.make("chat_interrupt", {
+  payload: { chatId: ChatId },
+  success: Schema.Void,
+  error: ChatNotFoundError,
+}) {}
+
+export class ChatRpc extends RpcGroup.make(
+  ChatEventsRpc,
+  ChatAskRpc,
+  ChatInterruptRpc,
+  ChatCreateRpc,
+  ChatListRpc,
+  ChatGetRpc,
+  ChatDeleteRpc,
+).middleware(AuthMiddleware) {}
