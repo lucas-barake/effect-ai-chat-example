@@ -16,7 +16,7 @@
   },
   "devDependencies": {
     "@app/scripts": "workspace:*",
-    "@effect/vitest": "4.0.0-beta.18",
+    "@effect/vitest": "4.0.0-beta.25",
     "@types/node": "^22.8.5",
     "dprint": "^0.48.0",
     "oxlint": "^1.23.0",
@@ -27,14 +27,14 @@
   },
   "pnpm": {
     "overrides": {
-      "effect": "4.0.0-beta.18",
-      "@effect/platform-browser": "4.0.0-beta.18",
-      "@effect/platform-node": "4.0.0-beta.18",
-      "@effect/sql-pg": "4.0.0-beta.18",
-      "@effect/vitest": "4.0.0-beta.18",
-      "@effect/atom-react": "4.0.0-beta.18",
-      "@effect/ai-anthropic": "4.0.0-beta.18",
-      "@effect/opentelemetry": "4.0.0-beta.18",
+      "effect": "4.0.0-beta.25",
+      "@effect/platform-browser": "4.0.0-beta.25",
+      "@effect/platform-node": "4.0.0-beta.25",
+      "@effect/sql-pg": "4.0.0-beta.25",
+      "@effect/vitest": "4.0.0-beta.25",
+      "@effect/atom-react": "4.0.0-beta.25",
+      "@effect/ai-anthropic": "4.0.0-beta.25",
+      "@effect/opentelemetry": "4.0.0-beta.25",
       "@opentelemetry/sdk-trace-base": "2.0.0",
       "@opentelemetry/sdk-trace-node": "2.0.0",
       "@opentelemetry/semantic-conventions": "1.30.0",
@@ -42,6 +42,9 @@
     },
     "onlyBuiltDependencies": [
       "dprint"
-    ]
+    ],
+    "patchedDependencies": {
+      "effect@4.0.0-beta.25": "patches/effect@4.0.0-beta.25.patch"
+    }
   }
 }

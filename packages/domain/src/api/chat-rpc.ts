@@ -1,51 +1,57 @@
-import * as Schema from "effect/Schema"
-import * as Rpc from "effect/unstable/rpc/Rpc"
-import * as RpcGroup from "effect/unstable/rpc/RpcGroup"
-import { ModelFamily } from "../ai-models.js"
-import { AuthMiddleware } from "../auth.js"
+import * as Schema from "effect/Schema";
+import * as AiError from "effect/unstable/ai/AiError";
+import * as Rpc from "effect/unstable/rpc/Rpc";
+import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
+import { ModelFamily } from "../ai-models.js";
+import { AuthMiddleware } from "../auth.js";
 
-export const ChatId = Schema.String.pipe(Schema.brand("ChatId"))
-export type ChatId = typeof ChatId.Type
+export const ChatId = Schema.String.pipe(
+  Schema.check(Schema.isUUID(undefined)),
+  Schema.brand("ChatId"),
+);
+export type ChatId = typeof ChatId.Type;
 
-export class ChatNotFoundError extends Schema.TaggedErrorClass<ChatNotFoundError>()("ChatNotFoundError", {
-  id: ChatId,
-}) {}
+export class ChatNotFoundError
+  extends Schema.TaggedErrorClass<ChatNotFoundError>()("ChatNotFoundError", {
+    id: ChatId,
+  })
+{}
 
-export const ReconciliationId = Schema.String.pipe(Schema.brand("ReconciliationId"))
-export type ReconciliationId = typeof ReconciliationId.Type
+export const ReconciliationId = Schema.String.pipe(Schema.brand("ReconciliationId"));
+export type ReconciliationId = typeof ReconciliationId.Type;
 
 export class GenerationInProgressError extends Schema.TaggedErrorClass<GenerationInProgressError>()(
   "GenerationInProgressError",
   { chatId: ChatId },
 ) {}
 
-export const ToolName = Schema.Literals(["getCurrentDateTime", "getWeather", "fetchRandomJoke"])
-export type ToolName = typeof ToolName.Type
+export const ToolName = Schema.Literals(["getCurrentDateTime", "getWeather", "fetchRandomJoke"]);
+export type ToolName = typeof ToolName.Type;
 
 export const ToolEvent = Schema.Union([
   Schema.TaggedStruct("ToolStart", { toolName: ToolName, input: Schema.String }),
   Schema.TaggedStruct("ToolFailure", { toolName: ToolName }),
   Schema.TaggedStruct("ToolSuccess", { toolName: ToolName, output: Schema.String }),
-])
-export type ToolEvent = typeof ToolEvent.Type
+]);
+export type ToolEvent = typeof ToolEvent.Type;
 
-const TextPart = Schema.Struct({ type: Schema.Literal("text"), text: Schema.String })
+const TextPart = Schema.Struct({ type: Schema.Literal("text"), text: Schema.String });
 const ToolCallPart = Schema.Struct({
   type: Schema.Literal("tool-call"),
   id: Schema.String,
   name: ToolName,
   params: Schema.Json,
-})
+});
 const ToolResultPart = Schema.Struct({
   type: Schema.Literal("tool-result"),
   id: Schema.String,
   name: ToolName,
   result: Schema.Json,
   isFailure: Schema.Boolean,
-})
-export const MessagePart = Schema.Union([TextPart, ToolCallPart, ToolResultPart])
-export type MessagePart = typeof MessagePart.Type
-const MessageContent = Schema.Union([Schema.String, Schema.Array(MessagePart)])
+});
+export const MessagePart = Schema.Union([TextPart, ToolCallPart, ToolResultPart]);
+export type MessagePart = typeof MessagePart.Type;
+const MessageContent = Schema.Union([Schema.String, Schema.Array(MessagePart)]);
 
 export class Message extends Schema.Opaque<Message>()(Schema.Struct({
   role: Schema.Literals(["user", "assistant", "tool"]),
@@ -61,21 +67,22 @@ export class Chat extends Schema.Opaque<Chat>()(Schema.Struct({
 })) {
   static readonly WithMessages = class WithMessages extends Schema.Opaque<WithMessages>()(
     Schema.Struct({ ...Chat.fields, messages: Schema.Array(Message) }),
-  ) {}
+  ) {};
 }
 
-const ChatEvent = Schema.Union([
+export const ChatEvent = Schema.Union([
   Schema.TaggedStruct("GenerationStarted", { reconciliationId: ReconciliationId }),
   Schema.TaggedStruct("Chunk", { delta: Schema.String }),
   Schema.TaggedStruct("ReasoningChunk", { delta: Schema.String }),
   Schema.TaggedStruct("ToolStart", { toolName: ToolName, input: Schema.String }),
   Schema.TaggedStruct("ToolFailure", { toolName: ToolName }),
   Schema.TaggedStruct("ToolSuccess", { toolName: ToolName, output: Schema.String }),
-  Schema.TaggedStruct("Error", { message: Schema.String }),
+  Schema.TaggedStruct("Failure", {
+    cause: Schema.Cause(Schema.Union([AiError.AiError, AiError.AiErrorReason]), Schema.Defect),
+  }),
   Schema.TaggedStruct("Done", {}),
-  Schema.TaggedStruct("Interrupted", {}),
-])
-export type ChatEvent = typeof ChatEvent.Type
+]);
+export type ChatEvent = typeof ChatEvent.Type;
 
 const MessageEvent = Schema.Union([
   Schema.TaggedStruct("Chunk", { delta: Schema.String }),
@@ -84,8 +91,8 @@ const MessageEvent = Schema.Union([
   Schema.TaggedStruct("ToolFailure", { toolName: ToolName }),
   Schema.TaggedStruct("ToolSuccess", { toolName: ToolName, output: Schema.String }),
   Schema.TaggedStruct("Error", { message: Schema.String }),
-])
-export type MessageEvent = typeof MessageEvent.Type
+]);
+export type MessageEvent = typeof MessageEvent.Type;
 
 export class ChatAskRpc extends Rpc.make("chat_ask", {
   payload: {

@@ -1,8 +1,8 @@
-import * as Effect from "effect/Effect"
-import { SqlClient } from "effect/unstable/sql/SqlClient"
+import * as Effect from "effect/Effect";
+import { SqlClient } from "effect/unstable/sql/SqlClient";
 
 export default Effect.gen(function*() {
-  const sql = yield* SqlClient
+  const sql = yield* SqlClient;
 
   yield* sql`
     CREATE TABLE chats (
@@ -14,7 +14,7 @@ export default Effect.gen(function*() {
       created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
-  `
+  `;
 
-  yield* sql`CREATE INDEX chats_user_id_idx ON chats (user_id)`
-})
+  yield* sql`CREATE INDEX chats_user_id_idx ON chats (user_id)`;
+});

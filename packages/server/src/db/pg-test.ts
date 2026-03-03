@@ -1,18 +1,18 @@
-import * as PgClient from "@effect/sql-pg/PgClient"
-import * as Effect from "effect/Effect"
-import * as Layer from "effect/Layer"
-import * as Redacted from "effect/Redacted"
-import * as Schema from "effect/Schema"
-import { SqlClient } from "effect/unstable/sql/SqlClient"
-import { pgConfig } from "./pg-live.js"
+import * as PgClient from "@effect/sql-pg/PgClient";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Redacted from "effect/Redacted";
+import * as Schema from "effect/Schema";
+import { SqlClient } from "effect/unstable/sql/SqlClient";
+import { pgConfig } from "./pg-live.js";
 
 const getTestDbUrl = (): string => {
-  const url = process.env.TEST_DB_URL
+  const url = process.env.TEST_DB_URL;
   if (!url) {
-    throw new Error("TEST_DB_URL not set. Ensure globalSetup is configured in vitest.config.ts")
+    throw new Error("TEST_DB_URL not set. Ensure globalSetup is configured in vitest.config.ts");
   }
-  return url
-}
+  return url;
+};
 
 export const PgTest = Layer.unwrap(
   Effect.sync(() =>
@@ -21,7 +21,7 @@ export const PgTest = Layer.unwrap(
       ...pgConfig,
     })
   ),
-).pipe(Layer.orDie)
+).pipe(Layer.orDie);
 
 export class TransactionRollback extends Schema.TaggedErrorClass<TransactionRollback>()(
   "TestRollback",
@@ -30,15 +30,15 @@ export class TransactionRollback extends Schema.TaggedErrorClass<TransactionRoll
 
 export const withTransactionRollback = <A, E, R>(self: Effect.Effect<A, E, R>) =>
   Effect.gen(function*() {
-    const sql = yield* SqlClient
+    const sql = yield* SqlClient;
     return yield* sql
       .withTransaction(
         Effect.gen(function*() {
-          const value = yield* self
-          return yield* new TransactionRollback({ value })
+          const value = yield* self;
+          return yield* new TransactionRollback({ value });
         }),
       )
       .pipe(
         Effect.catchIf(Schema.is(TransactionRollback), (error) => Effect.succeed(error.value as A)),
-      )
-  })
+      );
+  });
