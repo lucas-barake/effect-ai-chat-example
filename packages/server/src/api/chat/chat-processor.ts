@@ -48,13 +48,13 @@ export class ChatProcessor extends ServiceMap.Service<ChatProcessor>()("ChatProc
             }),
             Effect.fnUntraced(function*(acc, part) {
               if (part.type === "text-delta") {
-                yield* PubSub.publish(mailbox, { _tag: "Chunk" as const, delta: part.delta });
+                yield* PubSub.publish(mailbox, [{ _tag: "Chunk" as const, delta: part.delta }]);
                 return { ...acc, textSoFar: acc.textSoFar + part.delta };
               } else if (part.type === "reasoning-delta") {
-                yield* PubSub.publish(mailbox, {
+                yield* PubSub.publish(mailbox, [{
                   _tag: "ReasoningChunk" as const,
                   delta: part.delta,
-                });
+                }]);
                 return acc;
               } else if (part.type === "tool-call") {
                 return {

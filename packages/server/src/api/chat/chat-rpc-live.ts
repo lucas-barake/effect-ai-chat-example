@@ -18,8 +18,19 @@ export const ChatRpcHandler = Chat.ChatRpc.toLayer(
         Stream.unwrap(
           Effect.gen(function*() {
             const currentUser = yield* CurrentUser;
-            yield* chatRepo.findById(payload.chatId, currentUser.id);
-            return runManager.subscribe(payload.chatId);
+            return runManager.subscribe(payload.runId, currentUser.id);
+          }),
+        ),
+
+      chat_watch: (payload) =>
+        Stream.unwrap(
+          Effect.gen(function*() {
+            const currentUser = yield* CurrentUser;
+            const chat = yield* chatRepo.findById(payload.chatId, currentUser.id);
+            return Stream.fromIterable<Chat.ChatWatchEvent>([{
+              _tag: "RunChanged",
+              runId: chat.activeRunId,
+            }]).pipe(Stream.concat(runManager.watch(payload.chatId)));
           }),
         ),
 
@@ -27,11 +38,10 @@ export const ChatRpcHandler = Chat.ChatRpc.toLayer(
         const currentUser = yield* CurrentUser;
         const chat = yield* chatRepo.findById(payload.chatId, currentUser.id);
 
-        yield* runManager.startGeneration({
+        return yield* runManager.startGeneration({
           chatId: payload.chatId,
           chat,
           message: payload.message,
-          reconciliationId: payload.reconciliationId,
         });
       }),
 
@@ -71,6 +81,7 @@ export const ChatRpcHandler = Chat.ChatRpc.toLayer(
 
 export const ChatRpcLive: Layer.Layer<
   | Rpc.Handler<"chat_events">
+  | Rpc.Handler<"chat_watch">
   | Rpc.Handler<"chat_ask">
   | Rpc.Handler<"chat_interrupt">
   | Rpc.Handler<"chat_create">

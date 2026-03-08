@@ -5,6 +5,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as PubSub from "effect/PubSub";
 import * as Stream from "effect/Stream";
+import type * as Take from "effect/Take";
 import { LanguageModel } from "effect/unstable/ai";
 import { HandlersLive } from "./chat-toolkit-live.js";
 import { ChatMailbox, ChatToolkit } from "./chat-toolkit.js";
@@ -12,9 +13,13 @@ import { JokeApi } from "./joke-api.js";
 import { WeatherApi } from "./weather-api.js";
 
 const makeMailbox = Effect.gen(function*() {
-  const mailbox = yield* PubSub.unbounded<Chat.ChatEvent>({ replay: 100 });
+  const mailbox = yield* PubSub.unbounded<
+    Take.Take<Chat.ChatEvent, typeof Chat.ChatRunTerminalError.Type>
+  >({
+    replay: 100,
+  });
   const events = (n: number) =>
-    Stream.fromPubSub(mailbox).pipe(
+    Stream.fromPubSubTake(mailbox).pipe(
       Stream.take(n),
       Stream.runCollect,
     );
@@ -48,7 +53,7 @@ describe("chat toolkit handlers", () => {
             type: "tool-call",
             id: "t1",
             name: "getCurrentDateTime",
-            params: undefined,
+            params: {},
           }],
         }),
         Effect.provideService(ChatMailbox, mailbox),
@@ -143,7 +148,7 @@ describe("chat toolkit handlers", () => {
             type: "tool-call",
             id: "t1",
             name: "fetchRandomJoke",
-            params: undefined,
+            params: {},
           }],
         }),
         Effect.provideService(ChatMailbox, mailbox),
@@ -180,7 +185,7 @@ describe("chat toolkit handlers", () => {
             type: "tool-call",
             id: "t1",
             name: "fetchRandomJoke",
-            params: undefined,
+            params: {},
           }],
         }),
         Effect.provideService(ChatMailbox, mailbox),
@@ -207,7 +212,7 @@ describe("chat toolkit handlers", () => {
         Stream.runCollect,
         withLanguageModel({
           streamText: [
-            { type: "tool-call", id: "t1", name: "getCurrentDateTime", params: undefined },
+            { type: "tool-call", id: "t1", name: "getCurrentDateTime", params: {} },
           ],
         }),
         Effect.provideService(ChatMailbox, mailbox),

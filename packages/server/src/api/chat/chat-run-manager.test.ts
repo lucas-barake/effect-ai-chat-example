@@ -7,9 +7,11 @@ import { withLanguageModel } from "@test/utils/with-language-model.js";
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
+import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as AiError from "effect/unstable/ai/AiError";
 import { ChatProcessor } from "./chat-processor.js";
@@ -21,6 +23,7 @@ const mockChat = (overrides?: Partial<typeof ChatModel.Type>): typeof ChatModel.
   title: "Test Chat",
   model: "haiku-4.5",
   messages: [],
+  activeRunId: null,
   createdAt: DateTime.nowUnsafe(),
   updatedAt: DateTime.nowUnsafe(),
   ...overrides,
@@ -54,6 +57,9 @@ const makeMockChatRepo = (updatedMessagesRef?: Ref.Ref<ReadonlyArray<typeof Chat
       updatedMessagesRef
         ? Ref.set(updatedMessagesRef, messages)
         : Effect.void,
+    startRun: () => Effect.succeed(true),
+    finishRun: () => Effect.void,
+    clearActiveRun: () => Effect.void,
   });
 
 const makeTestLayer = (
@@ -68,65 +74,33 @@ const makeTestLayer = (
   );
 };
 
-const isTerminal = (e: Chat.ChatEvent) => e._tag === "Done" || e._tag === "Failure";
-
 describe("ChatRunManager", () => {
-  it.live("subscribe returns a stream that receives events", () =>
-    Effect.gen(function*() {
-      const mgr = yield* ChatRunManager;
-      const chatId = Chat.ChatId.makeUnsafe("00000000-0000-4000-8000-000000000001");
-      const reconciliationId = Chat.ReconciliationId.makeUnsafe("recon-1");
-
-      const eventsFiber = yield* mgr.subscribe(chatId).pipe(
-        Stream.take(3),
-        Stream.runCollect,
-        Effect.forkChild,
-      );
-
-      yield* Effect.sleep("50 millis");
-
-      yield* mgr.startGeneration({
-        chatId,
-        chat: mockChat(),
-        message: "Hello",
-        reconciliationId,
-      });
-
-      yield* Effect.sleep("200 millis");
-
-      const events = yield* Fiber.join(eventsFiber);
-      expect(events).toHaveLength(3);
-    }).pipe(Effect.provide(makeTestLayer())), { timeout: 5000 });
-
   it.live(
-    "startGeneration publishes GenerationStarted with reconciliationId",
-    () =>
-      Effect.gen(function*() {
+    "startGeneration streams events while the run is active",
+    () => {
+      const slowAi = Layer.mock(AiModels)({
+        use: (_model) => (effect) =>
+          withLanguageModel(effect, {
+            streamText: () =>
+              Stream.make({ type: "text-delta" as const, id: "t1", delta: "Hello" }).pipe(
+                Stream.tap(() => Effect.sleep("100 millis")),
+              ),
+          }),
+      });
+      return Effect.gen(function*() {
         const mgr = yield* ChatRunManager;
-        const chatId = Chat.ChatId.makeUnsafe("00000000-0000-4000-8000-000000000001");
-        const reconciliationId = Chat.ReconciliationId.makeUnsafe("recon-42");
+        const chat = mockChat();
 
-        const eventsFiber = yield* mgr.subscribe(chatId).pipe(
-          Stream.take(1),
-          Stream.runCollect,
-          Effect.forkChild,
-        );
-
-        yield* Effect.sleep("50 millis");
-
-        yield* mgr.startGeneration({
-          chatId,
-          chat: mockChat(),
+        const { runId } = yield* mgr.startGeneration({
+          chatId: chat.id,
+          chat,
           message: "Hello",
-          reconciliationId,
         });
 
-        yield* Effect.sleep("200 millis");
-
-        const events = yield* Fiber.join(eventsFiber);
-        expect(events[0]!._tag).toBe("GenerationStarted");
-        expect((events[0] as any).reconciliationId).toBe(reconciliationId);
-      }).pipe(Effect.provide(makeTestLayer())),
+        const events = yield* mgr.subscribe(runId, chat.userId).pipe(Stream.runCollect);
+        expect(events.some((event) => event._tag === "Chunk")).toBe(true);
+      }).pipe(Effect.provide(makeTestLayer(slowAi)));
+    },
     { timeout: 5000 },
   );
 
@@ -142,194 +116,64 @@ describe("ChatRunManager", () => {
     });
     return Effect.gen(function*() {
       const mgr = yield* ChatRunManager;
-      const chatId = Chat.ChatId.makeUnsafe("00000000-0000-4000-8000-000000000001");
-      const reconciliationId1 = Chat.ReconciliationId.makeUnsafe("recon-1");
-      const reconciliationId2 = Chat.ReconciliationId.makeUnsafe("recon-2");
+      const chat = mockChat();
 
       yield* mgr.startGeneration({
-        chatId,
-        chat: mockChat(),
+        chatId: chat.id,
+        chat,
         message: "First",
-        reconciliationId: reconciliationId1,
       });
       yield* Effect.sleep("50 millis");
 
       const exit = yield* mgr.startGeneration({
-        chatId,
-        chat: mockChat(),
+        chatId: chat.id,
+        chat,
         message: "Second",
-        reconciliationId: reconciliationId2,
       }).pipe(Effect.exit);
+
       expect(exit._tag).toBe("Failure");
     }).pipe(Effect.provide(makeTestLayer(slowAi)));
   }, { timeout: 5000 });
 
-  it.live("generation publishes Done on completion", () =>
+  it.effect("subscribe fails with ChatRunNotFoundError when run is missing", () =>
     Effect.gen(function*() {
       const mgr = yield* ChatRunManager;
-      const chatId = Chat.ChatId.makeUnsafe("00000000-0000-4000-8000-000000000001");
-      const reconciliationId = Chat.ReconciliationId.makeUnsafe("recon-1");
+      const runId = Chat.RunId.makeUnsafe("00000000-0000-4000-8000-000000000099");
 
-      const eventsFiber = yield* mgr.subscribe(chatId).pipe(
-        Stream.takeUntil(isTerminal),
-        Stream.runCollect,
-        Effect.forkChild,
-      );
-
-      yield* Effect.sleep("50 millis");
-
-      yield* mgr.startGeneration({
-        chatId,
-        chat: mockChat(),
-        message: "Hello",
-        reconciliationId,
-      });
-
-      yield* Effect.sleep("500 millis");
-
-      const events = yield* Fiber.join(eventsFiber);
-      const lastEvent = events[events.length - 1];
-      expect(lastEvent!._tag).toBe("Done");
-    }).pipe(Effect.provide(makeTestLayer())), { timeout: 5000 });
-
-  it.live(
-    "generation publishes Failure terminal on AiError (and not Done)",
-    () =>
-      Effect.gen(function*() {
-        const mgr = yield* ChatRunManager;
-        const chatId = Chat.ChatId.makeUnsafe("00000000-0000-4000-8000-000000000001");
-        const reconciliationId = Chat.ReconciliationId.makeUnsafe("recon-1");
-
-        const eventsFiber = yield* mgr.subscribe(chatId).pipe(
-          Stream.takeUntil(isTerminal),
-          Stream.runCollect,
-          Effect.forkChild,
-        );
-
-        yield* Effect.sleep("50 millis");
-
-        yield* mgr.startGeneration({
-          chatId,
-          chat: mockChat(),
-          message: "Hello",
-          reconciliationId,
-        });
-
-        yield* Effect.sleep("500 millis");
-
-        const events = yield* Fiber.join(eventsFiber);
-        const terminal = events[events.length - 1]!;
-        expect(terminal._tag).toBe("Failure");
-        expect(events.every((e) => e._tag !== "Done")).toBe(true);
-        if (terminal._tag === "Failure") {
-          const reasons = terminal.cause.reasons;
-          expect(reasons.some((r) => r._tag === "Fail" && r.error._tag === "AiError")).toBe(true);
-        }
-      }).pipe(Effect.provide(makeTestLayer(FailingAiModels))),
-    { timeout: 5000 },
-  );
-
-  it.live("interrupt publishes Failure terminal with interrupt-only cause", () => {
-    const slowAi = Layer.mock(AiModels)({
-      use: (_model) => (effect) =>
-        withLanguageModel(effect, {
-          streamText: () =>
-            Stream.make({ type: "text-delta" as const, id: "t1", delta: "slow" }).pipe(
-              Stream.tap(() => Effect.sleep("10 seconds")),
-            ),
-        }),
-    });
-    return Effect.gen(function*() {
-      const mgr = yield* ChatRunManager;
-      const chatId = Chat.ChatId.makeUnsafe("00000000-0000-4000-8000-000000000001");
-      const reconciliationId = Chat.ReconciliationId.makeUnsafe("recon-1");
-
-      const eventsFiber = yield* mgr.subscribe(chatId).pipe(
-        Stream.takeUntil(isTerminal),
-        Stream.runCollect,
-        Effect.forkChild,
-      );
-
-      yield* Effect.sleep("50 millis");
-
-      yield* mgr.startGeneration({
-        chatId,
-        chat: mockChat(),
-        message: "Hello",
-        reconciliationId,
-      });
-      yield* Effect.sleep("100 millis");
-
-      yield* mgr.interrupt(chatId);
-
-      yield* Effect.sleep("200 millis");
-
-      const events = yield* Fiber.join(eventsFiber);
-      const terminal = events[events.length - 1]!;
-      expect(terminal._tag).toBe("Failure");
-      if (terminal._tag === "Failure") {
-        expect(Cause.hasInterruptsOnly(terminal.cause)).toBe(true);
+      const exit = yield* mgr.subscribe(runId, "user-1").pipe(Stream.runDrain, Effect.exit);
+      expect(exit._tag).toBe("Failure");
+      if (exit._tag === "Failure") {
+        expect(
+          exit.cause.reasons.some((reason) =>
+            reason._tag === "Fail" && reason.error._tag === "ChatRunNotFoundError"
+          ),
+        ).toBe(true);
       }
-    }).pipe(Effect.provide(makeTestLayer(slowAi)));
-  }, { timeout: 5000 });
-
-  it.effect("interrupt is no-op when no generation running", () =>
-    Effect.gen(function*() {
-      const mgr = yield* ChatRunManager;
-      const chatId = Chat.ChatId.makeUnsafe("00000000-0000-4000-8000-000000000001");
-      yield* mgr.interrupt(chatId);
     }).pipe(Effect.provide(makeTestLayer())));
 
-  it.live("late subscriber receives replayed events including Done", () =>
+  it.live("failed generation fails stream with AiError", () =>
     Effect.gen(function*() {
       const mgr = yield* ChatRunManager;
-      const chatId = Chat.ChatId.makeUnsafe("00000000-0000-4000-8000-000000000001");
-      const reconciliationId = Chat.ReconciliationId.makeUnsafe("recon-1");
+      const chat = mockChat();
 
-      yield* mgr.startGeneration({
-        chatId,
-        chat: mockChat(),
+      const { runId } = yield* mgr.startGeneration({
+        chatId: chat.id,
+        chat,
         message: "Hello",
-        reconciliationId,
       });
-      yield* Effect.sleep("500 millis");
 
-      const events = yield* mgr.subscribe(chatId).pipe(
-        Stream.takeUntil(isTerminal),
-        Stream.runCollect,
-      );
-      expect(events.some((e) => e._tag === "GenerationStarted")).toBe(true);
-      expect(events[events.length - 1]!._tag).toBe("Done");
-    }).pipe(Effect.provide(makeTestLayer())), { timeout: 5000 });
-
-  it.live("late subscriber receives replayed Failure terminal", () =>
-    Effect.gen(function*() {
-      const mgr = yield* ChatRunManager;
-      const chatId = Chat.ChatId.makeUnsafe("00000000-0000-4000-8000-000000000001");
-      const reconciliationId = Chat.ReconciliationId.makeUnsafe("recon-1");
-
-      yield* mgr.startGeneration({
-        chatId,
-        chat: mockChat(),
-        message: "Hello",
-        reconciliationId,
-      });
-      yield* Effect.sleep("500 millis");
-
-      const events = yield* mgr.subscribe(chatId).pipe(
-        Stream.takeUntil(isTerminal),
-        Stream.runCollect,
-      );
-      expect(events.some((e) => e._tag === "GenerationStarted")).toBe(true);
-      const terminal = events[events.length - 1]!;
-      expect(terminal._tag).toBe("Failure");
-      if (terminal._tag === "Failure") {
-        const reasons = terminal.cause.reasons;
-        expect(reasons.some((r) => r._tag === "Fail" && r.error._tag === "AiError")).toBe(true);
+      const exit = yield* mgr.subscribe(runId, chat.userId).pipe(Stream.runDrain, Effect.exit);
+      expect(exit._tag).toBe("Failure");
+      if (exit._tag === "Failure") {
+        expect(
+          exit.cause.reasons.some((reason) =>
+            reason._tag === "Fail" && reason.error._tag === "AiError"
+          ),
+        ).toBe(true);
       }
     }).pipe(Effect.provide(makeTestLayer(FailingAiModels))), { timeout: 5000 });
 
-  it.live("interrupt observed by all subscribers", () => {
+  it.live("interrupt fails active stream with interrupt-only cause", () => {
     const slowAi = Layer.mock(AiModels)({
       use: (_model) => (effect) =>
         withLanguageModel(effect, {
@@ -341,155 +185,147 @@ describe("ChatRunManager", () => {
     });
     return Effect.gen(function*() {
       const mgr = yield* ChatRunManager;
-      const chatId = Chat.ChatId.makeUnsafe("00000000-0000-4000-8000-000000000001");
-      const reconciliationId = Chat.ReconciliationId.makeUnsafe("recon-1");
+      const chat = mockChat();
 
-      const sub1Fiber = yield* mgr.subscribe(chatId).pipe(
-        Stream.takeUntil(isTerminal),
-        Stream.runCollect,
-        Effect.forkChild,
-      );
-      const sub2Fiber = yield* mgr.subscribe(chatId).pipe(
-        Stream.takeUntil(isTerminal),
-        Stream.runCollect,
-        Effect.forkChild,
-      );
-
-      yield* Effect.sleep("50 millis");
-
-      yield* mgr.startGeneration({
-        chatId,
-        chat: mockChat(),
+      const { runId } = yield* mgr.startGeneration({
+        chatId: chat.id,
+        chat,
         message: "Hello",
-        reconciliationId,
       });
+      const exitFiber = yield* mgr.subscribe(runId, chat.userId).pipe(
+        Stream.runDrain,
+        Effect.exit,
+        Effect.forkChild,
+      );
+
       yield* Effect.sleep("100 millis");
+      yield* mgr.interrupt(chat.id);
 
-      yield* mgr.interrupt(chatId);
-      yield* Effect.sleep("200 millis");
-
-      const events1 = yield* Fiber.join(sub1Fiber);
-      const events2 = yield* Fiber.join(sub2Fiber);
-      const terminal1 = events1[events1.length - 1]!;
-      const terminal2 = events2[events2.length - 1]!;
-      expect(terminal1._tag).toBe("Failure");
-      expect(terminal2._tag).toBe("Failure");
-      if (terminal1._tag === "Failure") {
-        expect(Cause.hasInterruptsOnly(terminal1.cause)).toBe(true);
-      }
-      if (terminal2._tag === "Failure") {
-        expect(Cause.hasInterruptsOnly(terminal2.cause)).toBe(true);
+      const exit = yield* Fiber.join(exitFiber);
+      expect(exit._tag).toBe("Failure");
+      if (exit._tag === "Failure") {
+        expect(Cause.hasInterruptsOnly(exit.cause)).toBe(true);
       }
     }).pipe(Effect.provide(makeTestLayer(slowAi)));
   }, { timeout: 5000 });
 
-  it.live(
-    "concurrent starts for same chatId: one succeeds, one fails",
-    () =>
-      Effect.gen(function*() {
-        const mgr = yield* ChatRunManager;
-        const chatId = Chat.ChatId.makeUnsafe("00000000-0000-4000-8000-000000000001");
-        const recon1 = Chat.ReconciliationId.makeUnsafe("recon-1");
-        const recon2 = Chat.ReconciliationId.makeUnsafe("recon-2");
-
-        const [exit1, exit2] = yield* Effect.all([
-          mgr.startGeneration({
-            chatId,
-            chat: mockChat(),
-            message: "First",
-            reconciliationId: recon1,
-          }).pipe(Effect.exit),
-          mgr.startGeneration({
-            chatId,
-            chat: mockChat(),
-            message: "Second",
-            reconciliationId: recon2,
-          }).pipe(Effect.exit),
-        ]);
-
-        const oneSucceeded = (exit1._tag === "Success" && exit2._tag === "Failure")
-          || (exit1._tag === "Failure" && exit2._tag === "Success");
-        expect(oneSucceeded).toBe(true);
-      }).pipe(Effect.provide(makeTestLayer())),
-    { timeout: 5000 },
-  );
-
-  it.live(
-    "completed generation does not leave stale entry in activeRuns",
-    () =>
-      Effect.gen(function*() {
-        const mgr = yield* ChatRunManager;
-        const chatId = Chat.ChatId.makeUnsafe("00000000-0000-4000-8000-000000000001");
-
-        yield* mgr.startGeneration({
-          chatId,
-          chat: mockChat(),
-          message: "First",
-          reconciliationId: Chat.ReconciliationId.makeUnsafe("r1"),
-        });
-        yield* Effect.sleep("500 millis");
-
-        const exit = yield* mgr.startGeneration({
-          chatId,
-          chat: mockChat(),
-          message: "Second",
-          reconciliationId: Chat.ReconciliationId.makeUnsafe("r2"),
-        }).pipe(Effect.exit);
-        expect(exit._tag).toBe("Success");
-      }).pipe(Effect.provide(makeTestLayer(FailingAiModels))),
-    { timeout: 5000 },
-  );
-
-  it.live("exactly one terminal event is emitted per run", () =>
+  it.live("completed run invalidates the run stream entry", () =>
     Effect.gen(function*() {
       const mgr = yield* ChatRunManager;
-      const chatId = Chat.ChatId.makeUnsafe("00000000-0000-4000-8000-000000000001");
-      const reconciliationId = Chat.ReconciliationId.makeUnsafe("recon-1");
+      const chat = mockChat();
 
-      const eventsFiber = yield* mgr.subscribe(chatId).pipe(
-        Stream.takeUntil(isTerminal),
-        Stream.runCollect,
-        Effect.forkChild,
-      );
-
-      yield* Effect.sleep("50 millis");
-
-      yield* mgr.startGeneration({
-        chatId,
-        chat: mockChat(),
+      const { runId } = yield* mgr.startGeneration({
+        chatId: chat.id,
+        chat,
         message: "Hello",
-        reconciliationId,
       });
+      yield* Effect.sleep("200 millis");
 
-      yield* Effect.sleep("500 millis");
-
-      const events = yield* Fiber.join(eventsFiber);
-      const terminals = events.filter(isTerminal);
-      expect(terminals).toHaveLength(1);
+      const exit = yield* mgr.subscribe(runId, chat.userId).pipe(Stream.runDrain, Effect.exit);
+      expect(exit._tag).toBe("Failure");
+      if (exit._tag === "Failure") {
+        expect(
+          exit.cause.reasons.some((reason) =>
+            reason._tag === "Fail" && reason.error._tag === "ChatRunNotFoundError"
+          ),
+        ).toBe(true);
+      }
     }).pipe(Effect.provide(makeTestLayer())), { timeout: 5000 });
 
-  it.live("generation persists messages on completion", () =>
+  it.live("interrupted run invalidates the run stream entry", () => {
+    const slowAi = Layer.mock(AiModels)({
+      use: (_model) => (effect) =>
+        withLanguageModel(effect, {
+          streamText: () =>
+            Stream.make({ type: "text-delta" as const, id: "t1", delta: "slow" }).pipe(
+              Stream.tap(() => Effect.sleep("10 seconds")),
+            ),
+        }),
+    });
+    return Effect.gen(function*() {
+      const mgr = yield* ChatRunManager;
+      const chat = mockChat();
+
+      const { runId } = yield* mgr.startGeneration({
+        chatId: chat.id,
+        chat,
+        message: "Hello",
+      });
+      yield* Effect.sleep("100 millis");
+
+      yield* mgr.interrupt(chat.id);
+      yield* Effect.sleep("200 millis");
+
+      const exit = yield* mgr.subscribe(runId, chat.userId).pipe(Stream.runDrain, Effect.exit);
+      expect(exit._tag).toBe("Failure");
+      if (exit._tag === "Failure") {
+        expect(
+          exit.cause.reasons.some((reason) =>
+            reason._tag === "Fail" && reason.error._tag === "ChatRunNotFoundError"
+          ),
+        ).toBe(true);
+      }
+    }).pipe(Effect.provide(makeTestLayer(slowAi)));
+  }, { timeout: 5000 });
+
+  it.live("completed generation releases the active chat lock", () =>
     Effect.gen(function*() {
-      const updatedRef = yield* Ref.make<ReadonlyArray<typeof Chat.Message.Type>>([]);
-      const repo = makeMockChatRepo(updatedRef);
+      const mgr = yield* ChatRunManager;
+      const chat = mockChat();
 
-      yield* Effect.gen(function*() {
-        const mgr = yield* ChatRunManager;
-        const chatId = Chat.ChatId.makeUnsafe("00000000-0000-4000-8000-000000000001");
-        const reconciliationId = Chat.ReconciliationId.makeUnsafe("recon-1");
+      yield* mgr.startGeneration({
+        chatId: chat.id,
+        chat,
+        message: "Hello",
+      });
+      yield* Effect.sleep("200 millis");
 
-        yield* mgr.startGeneration({
-          chatId,
-          chat: mockChat(),
-          message: "Hello",
-          reconciliationId,
-        });
-        yield* Effect.sleep("500 millis");
+      const second = yield* mgr.startGeneration({
+        chatId: chat.id,
+        chat,
+        message: "Again",
+      });
 
-        const messages = yield* Ref.get(updatedRef);
-        expect(messages.length).toBeGreaterThan(0);
-        expect(messages[0]!.role).toBe("user");
-        expect(messages[0]!.content).toBe("Hello");
-      }).pipe(Effect.provide(makeTestLayer(MockAiModels, repo)));
-    }), { timeout: 5000 });
+      expect(second.runId).toBeDefined();
+    }).pipe(Effect.provide(makeTestLayer())), { timeout: 5000 });
+
+  it.live("closing manager scope interrupts an active generation", () => {
+    let finalized = false;
+    const slowAi = Layer.mock(AiModels)({
+      use: (_model) => (effect) =>
+        withLanguageModel(effect, {
+          streamText: () =>
+            Stream.make({ type: "text-delta" as const, id: "t1", delta: "slow" }).pipe(
+              Stream.tap(() => Effect.never),
+              Stream.ensuring(
+                Effect.sync(() => {
+                  finalized = true;
+                }),
+              ),
+            ),
+        }),
+    });
+    return Effect.gen(function*() {
+      const scope = yield* Scope.make();
+      const mgr = yield* ChatRunManager.make.pipe(
+        Effect.provide(slowAi),
+        Effect.provide(makeMockChatRepo()),
+        Effect.provide(ChatProcessor.layer),
+        Scope.provide(scope),
+      );
+      const chat = mockChat();
+
+      yield* mgr.startGeneration({
+        chatId: chat.id,
+        chat,
+        message: "Hello",
+      });
+      yield* Effect.sleep("100 millis");
+
+      yield* Scope.close(scope, Exit.void);
+      yield* Effect.sleep("100 millis");
+
+      expect(finalized).toBe(true);
+    });
+  }, { timeout: 5000 });
 });

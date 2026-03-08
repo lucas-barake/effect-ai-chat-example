@@ -9,6 +9,7 @@ export class ChatModel extends Model.Class<ChatModel>("ChatModel")({
   title: Schema.NonEmptyString,
   model: ModelFamily,
   messages: Model.JsonFromString(Schema.Array(Chat.Message)),
+  activeRunId: Schema.NullOr(Chat.RunId),
   createdAt: Model.DateTimeInsert,
   updatedAt: Model.DateTimeUpdate,
 }) {}

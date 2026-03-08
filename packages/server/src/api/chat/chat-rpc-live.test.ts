@@ -26,6 +26,7 @@ const mockChat = (
   title: "Test Chat",
   model: "haiku-4.5",
   messages: [],
+  activeRunId: null,
   createdAt: DateTime.nowUnsafe(),
   updatedAt: DateTime.nowUnsafe(),
   ...overrides,
@@ -46,6 +47,9 @@ const MockChatRepo = Layer.mock(ChatRepo)({
   listByUser: () => Effect.succeed({ items: [mockChat()], hasMore: false }),
   delete: () => Effect.void,
   updateMessages: () => Effect.void,
+  startRun: () => Effect.succeed(true),
+  finishRun: () => Effect.void,
+  clearActiveRun: () => Effect.void,
 });
 
 const NotFoundChatRepo = Layer.mock(ChatRepo)({
@@ -54,9 +58,22 @@ const NotFoundChatRepo = Layer.mock(ChatRepo)({
   listByUser: () => Effect.die("not called"),
   delete: (chatId) => Effect.fail(new Chat.ChatNotFoundError({ id: chatId })),
   updateMessages: () => Effect.die("not called"),
+  startRun: () => Effect.die("not called"),
+  finishRun: () => Effect.die("not called"),
+  clearActiveRun: () => Effect.die("not called"),
 });
 
-const FailingAiModels = Layer.mock(AiModels)({
+const SlowAiModels = Layer.mock(AiModels)({
+  use: (_model) => (effect) =>
+    withLanguageModel(effect, {
+      streamText: () =>
+        Stream.make({ type: "text-delta" as const, id: "t1", delta: "Hello from AI" }).pipe(
+          Stream.tap(() => Effect.sleep("100 millis")),
+        ),
+    }),
+});
+
+const DelayedFailingAiModels = Layer.mock(AiModels)({
   use: (_model) => (_effect) =>
     Effect.fail(
       new AiError.AiError({
@@ -64,7 +81,7 @@ const FailingAiModels = Layer.mock(AiModels)({
         method: "streamText",
         reason: new AiError.RateLimitError({}),
       }),
-    ) as any,
+    ).pipe(Effect.delay("100 millis")) as any,
 });
 
 const makeRunManagerLayer = (
@@ -148,12 +165,19 @@ describe("ChatRpc", () => {
       const chatId = Chat.ChatId.makeUnsafe(
         "00000000-0000-4000-8000-000000000099",
       );
-      const reconciliationId = Chat.ReconciliationId.makeUnsafe("recon-1");
-      const exit = yield* client
-        .chat_ask({ chatId, message: "Hello", reconciliationId })
-        .pipe(Effect.exit);
+      const exit = yield* client.chat_ask({ chatId, message: "Hello" }).pipe(Effect.exit);
       expect(exit._tag).toBe("Failure");
     }).pipe(Effect.provide(NotFoundLayer)));
+
+  it.effect("chat_ask returns a runId", () =>
+    Effect.gen(function*() {
+      const client = yield* RpcTest.makeClient(Chat.ChatRpc);
+      const chatId = Chat.ChatId.makeUnsafe(
+        "00000000-0000-4000-8000-000000000001",
+      );
+      const result = yield* client.chat_ask({ chatId, message: "Hello" });
+      expect(result.runId).toBeDefined();
+    }).pipe(Effect.provide(TestLayer)));
 
   it.live(
     "chat_ask saves user message before starting generation",
@@ -167,6 +191,9 @@ describe("ChatRpc", () => {
         listByUser: () => Effect.succeed({ items: [mockChat()], hasMore: false }),
         delete: () => Effect.void,
         updateMessages: ({ messages }) => Ref.set(updatedRef, messages),
+        startRun: () => Effect.succeed(true),
+        finishRun: () => Effect.void,
+        clearActiveRun: () => Effect.void,
       });
       const TrackingLayer = Layer.mergeAll(
         ChatRpcHandler.pipe(
@@ -180,12 +207,10 @@ describe("ChatRpc", () => {
         const chatId = Chat.ChatId.makeUnsafe(
           "00000000-0000-4000-8000-000000000001",
         );
-        const reconciliationId = Chat.ReconciliationId.makeUnsafe("recon-1");
 
         yield* client.chat_ask({
           chatId,
           message: "Hello world",
-          reconciliationId,
         });
         yield* Effect.sleep("200 millis");
 
@@ -199,46 +224,34 @@ describe("ChatRpc", () => {
   );
 
   it.live(
-    "chat_ask starts generation and events flow through chat_events",
-    () =>
-      Effect.gen(function*() {
+    "chat_events streams events for the returned runId",
+    () => {
+      const StreamLayer = Layer.mergeAll(
+        ChatRpcHandler.pipe(
+          Layer.provide(makeRunManagerLayer(MockChatRepo, SlowAiModels)),
+          Layer.provide(MockChatRepo),
+        ),
+        AuthMiddlewareLive,
+      );
+      return Effect.gen(function*() {
         const client = yield* RpcTest.makeClient(Chat.ChatRpc);
         const chatId = Chat.ChatId.makeUnsafe(
           "00000000-0000-4000-8000-000000000001",
         );
-        const reconciliationId = Chat.ReconciliationId.makeUnsafe("recon-1");
 
-        const eventsFiber = yield* client
-          .chat_events({ chatId })
-          .pipe(Stream.take(3), Stream.runCollect, Effect.forkChild);
+        const { runId } = yield* client.chat_ask({ chatId, message: "Hello" });
+        const events = yield* client.chat_events({ runId }).pipe(Stream.runCollect);
 
-        yield* Effect.sleep("50 millis");
-
-        yield* client.chat_ask({ chatId, message: "Hello", reconciliationId });
-
-        yield* Effect.sleep("100 millis");
-
-        const events = yield* Fiber.join(eventsFiber);
-        expect(events.some((e) => e._tag === "GenerationStarted")).toBe(true);
         expect(events.some((e) => e._tag === "Chunk")).toBe(true);
-        expect(events.some((e) => e._tag === "Done")).toBe(true);
-      }).pipe(Effect.provide(TestLayer)),
+      }).pipe(Effect.provide(StreamLayer));
+    },
     { timeout: 5000 },
   );
 
-  it.effect("chat_interrupt is no-op when no generation running", () =>
-    Effect.gen(function*() {
-      const client = yield* RpcTest.makeClient(Chat.ChatRpc);
-      const chatId = Chat.ChatId.makeUnsafe(
-        "00000000-0000-4000-8000-000000000001",
-      );
-      yield* client.chat_interrupt({ chatId });
-    }).pipe(Effect.provide(TestLayer)));
-
-  it.live("chat_events emits Failure terminal when generation fails", () => {
+  it.live("chat_events fails with AiError when generation fails", () => {
     const FailLayer = Layer.mergeAll(
       ChatRpcHandler.pipe(
-        Layer.provide(makeRunManagerLayer(MockChatRepo, FailingAiModels)),
+        Layer.provide(makeRunManagerLayer(MockChatRepo, DelayedFailingAiModels)),
         Layer.provide(MockChatRepo),
       ),
       AuthMiddlewareLive,
@@ -248,29 +261,22 @@ describe("ChatRpc", () => {
       const chatId = Chat.ChatId.makeUnsafe(
         "00000000-0000-4000-8000-000000000001",
       );
-      const reconciliationId = Chat.ReconciliationId.makeUnsafe("recon-1");
 
-      const eventsFiber = yield* client
-        .chat_events({ chatId })
-        .pipe(
-          Stream.takeUntil((e) => e._tag === "Done" || e._tag === "Failure"),
-          Stream.runCollect,
-          Effect.forkChild,
-        );
+      const { runId } = yield* client.chat_ask({ chatId, message: "Hello" });
+      const exit = yield* client.chat_events({ runId }).pipe(Stream.runDrain, Effect.exit);
 
-      yield* Effect.sleep("50 millis");
-
-      yield* client.chat_ask({ chatId, message: "Hello", reconciliationId });
-
-      yield* Effect.sleep("500 millis");
-
-      const events = yield* Fiber.join(eventsFiber);
-      const terminal = events[events.length - 1]!;
-      expect(terminal._tag).toBe("Failure");
+      expect(exit._tag).toBe("Failure");
+      if (exit._tag === "Failure") {
+        expect(
+          exit.cause.reasons.some((reason) =>
+            reason._tag === "Fail" && reason.error._tag === "AiError"
+          ),
+        ).toBe(true);
+      }
     }).pipe(Effect.provide(FailLayer));
   }, { timeout: 5000 });
 
-  it.live("chat_events emits Failure terminal with interrupt-only cause when interrupted", () => {
+  it.live("chat_events fails with interrupt-only cause when interrupted", () => {
     const slowAi = Layer.mock(AiModels)({
       use: (_model) => (effect) =>
         withLanguageModel(effect, {
@@ -292,30 +298,31 @@ describe("ChatRpc", () => {
       const chatId = Chat.ChatId.makeUnsafe(
         "00000000-0000-4000-8000-000000000001",
       );
-      const reconciliationId = Chat.ReconciliationId.makeUnsafe("recon-1");
 
-      const eventsFiber = yield* client
-        .chat_events({ chatId })
-        .pipe(
-          Stream.takeUntil((e) => e._tag === "Done" || e._tag === "Failure"),
-          Stream.runCollect,
-          Effect.forkChild,
-        );
+      const { runId } = yield* client.chat_ask({ chatId, message: "Hello" });
+      const exitFiber = yield* client.chat_events({ runId }).pipe(
+        Stream.runDrain,
+        Effect.exit,
+        Effect.forkChild,
+      );
 
-      yield* Effect.sleep("50 millis");
-
-      yield* client.chat_ask({ chatId, message: "Hello", reconciliationId });
       yield* Effect.sleep("100 millis");
-
       yield* client.chat_interrupt({ chatId });
-      yield* Effect.sleep("200 millis");
 
-      const events = yield* Fiber.join(eventsFiber);
-      const terminal = events[events.length - 1]!;
-      expect(terminal._tag).toBe("Failure");
-      if (terminal._tag === "Failure") {
-        expect(Cause.hasInterruptsOnly(terminal.cause)).toBe(true);
+      const exit = yield* Fiber.join(exitFiber);
+      expect(exit._tag).toBe("Failure");
+      if (exit._tag === "Failure") {
+        expect(Cause.hasInterruptsOnly(exit.cause)).toBe(true);
       }
     }).pipe(Effect.provide(SlowLayer));
   }, { timeout: 5000 });
+
+  it.effect("chat_interrupt is no-op when no generation running", () =>
+    Effect.gen(function*() {
+      const client = yield* RpcTest.makeClient(Chat.ChatRpc);
+      const chatId = Chat.ChatId.makeUnsafe(
+        "00000000-0000-4000-8000-000000000001",
+      );
+      yield* client.chat_interrupt({ chatId });
+    }).pipe(Effect.provide(TestLayer)));
 });

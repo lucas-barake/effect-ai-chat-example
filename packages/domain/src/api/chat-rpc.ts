@@ -17,13 +17,29 @@ export class ChatNotFoundError
   })
 {}
 
-export const ReconciliationId = Schema.String.pipe(Schema.brand("ReconciliationId"));
-export type ReconciliationId = typeof ReconciliationId.Type;
+export const RunId = Schema.String.pipe(
+  Schema.check(Schema.isUUID(undefined)),
+  Schema.brand("RunId"),
+);
+export type RunId = typeof RunId.Type;
+
+export class ChatRunNotFoundError extends Schema.TaggedErrorClass<ChatRunNotFoundError>()(
+  "ChatRunNotFoundError",
+  { runId: RunId },
+) {}
 
 export class GenerationInProgressError extends Schema.TaggedErrorClass<GenerationInProgressError>()(
   "GenerationInProgressError",
   { chatId: ChatId },
 ) {}
+
+export const ChatRunTerminalError = Schema.Union([AiError.AiError, AiError.AiErrorReason]);
+export const ChatRunError = Schema.Union([ChatRunNotFoundError, ChatRunTerminalError]);
+
+export const ChatWatchEvent = Schema.TaggedStruct("RunChanged", {
+  runId: Schema.NullOr(RunId),
+});
+export type ChatWatchEvent = typeof ChatWatchEvent.Type;
 
 export const ToolName = Schema.Literals(["getCurrentDateTime", "getWeather", "fetchRandomJoke"]);
 export type ToolName = typeof ToolName.Type;
@@ -66,21 +82,20 @@ export class Chat extends Schema.Opaque<Chat>()(Schema.Struct({
   updatedAt: Schema.DateTimeUtcFromString,
 })) {
   static readonly WithMessages = class WithMessages extends Schema.Opaque<WithMessages>()(
-    Schema.Struct({ ...Chat.fields, messages: Schema.Array(Message) }),
+    Schema.Struct({
+      ...Chat.fields,
+      messages: Schema.Array(Message),
+      activeRunId: Schema.NullOr(RunId),
+    }),
   ) {};
 }
 
 export const ChatEvent = Schema.Union([
-  Schema.TaggedStruct("GenerationStarted", { reconciliationId: ReconciliationId }),
   Schema.TaggedStruct("Chunk", { delta: Schema.String }),
   Schema.TaggedStruct("ReasoningChunk", { delta: Schema.String }),
   Schema.TaggedStruct("ToolStart", { toolName: ToolName, input: Schema.String }),
   Schema.TaggedStruct("ToolFailure", { toolName: ToolName }),
   Schema.TaggedStruct("ToolSuccess", { toolName: ToolName, output: Schema.String }),
-  Schema.TaggedStruct("Failure", {
-    cause: Schema.Cause(Schema.Union([AiError.AiError, AiError.AiErrorReason]), Schema.Defect),
-  }),
-  Schema.TaggedStruct("Done", {}),
 ]);
 export type ChatEvent = typeof ChatEvent.Type;
 
@@ -98,16 +113,22 @@ export class ChatAskRpc extends Rpc.make("chat_ask", {
   payload: {
     chatId: ChatId,
     message: Schema.String,
-    reconciliationId: ReconciliationId,
   },
-  success: Schema.Void,
+  success: Schema.Struct({ runId: RunId }),
   error: Schema.Union([ChatNotFoundError, GenerationInProgressError]),
 }) {}
 
 export class ChatEventsRpc extends Rpc.make("chat_events", {
   stream: true,
-  payload: { chatId: ChatId },
+  payload: { runId: RunId },
   success: ChatEvent,
+  error: ChatRunError,
+}) {}
+
+export class ChatWatchRpc extends Rpc.make("chat_watch", {
+  stream: true,
+  payload: { chatId: ChatId },
+  success: ChatWatchEvent,
   error: ChatNotFoundError,
 }) {}
 
@@ -149,6 +170,7 @@ export class ChatInterruptRpc extends Rpc.make("chat_interrupt", {
 
 export class ChatRpc extends RpcGroup.make(
   ChatEventsRpc,
+  ChatWatchRpc,
   ChatAskRpc,
   ChatInterruptRpc,
   ChatCreateRpc,

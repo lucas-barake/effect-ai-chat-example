@@ -7,6 +7,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as PubSub from "effect/PubSub";
 import * as Stream from "effect/Stream";
+import type * as Take from "effect/Take";
 import { ChatProcessor, makePrompt } from "./chat-processor.js";
 import { HandlersLive } from "./chat-toolkit-live.js";
 import { ChatMailbox } from "./chat-toolkit.js";
@@ -14,9 +15,13 @@ import { JokeApi } from "./joke-api.js";
 import { WeatherApi } from "./weather-api.js";
 
 const makeMailbox = Effect.gen(function*() {
-  const mailbox = yield* PubSub.unbounded<Chat.ChatEvent>({ replay: 100 });
+  const mailbox = yield* PubSub.unbounded<
+    Take.Take<Chat.ChatEvent, typeof Chat.ChatRunTerminalError.Type>
+  >({
+    replay: 100,
+  });
   const events = (n: number) =>
-    Stream.fromPubSub(mailbox).pipe(
+    Stream.fromPubSubTake(mailbox).pipe(
       Stream.take(n),
       Stream.runCollect,
     );
@@ -42,6 +47,7 @@ const mockChat = (overrides?: Partial<typeof ChatModel.Type>): typeof ChatModel.
   title: "Test Chat",
   model: "haiku-4.5",
   messages: [],
+  activeRunId: null,
   createdAt: DateTime.nowUnsafe(),
   updatedAt: DateTime.nowUnsafe(),
   ...overrides,

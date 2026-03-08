@@ -34,6 +34,23 @@ export class ChatRepo extends ServiceMap.Service<ChatRepo, {
     readonly userId: string;
     readonly messages: ReadonlyArray<typeof Chat.Message.Type>;
   }) => Effect.Effect<void>;
+  readonly startRun: (args: {
+    readonly chatId: Chat.ChatId;
+    readonly userId: string;
+    readonly runId: Chat.RunId;
+    readonly messages: ReadonlyArray<typeof Chat.Message.Type>;
+  }) => Effect.Effect<boolean>;
+  readonly finishRun: (args: {
+    readonly chatId: Chat.ChatId;
+    readonly userId: string;
+    readonly runId: Chat.RunId;
+    readonly messages: ReadonlyArray<typeof Chat.Message.Type>;
+  }) => Effect.Effect<void>;
+  readonly clearActiveRun: (args: {
+    readonly chatId: Chat.ChatId;
+    readonly userId: string;
+    readonly runId: Chat.RunId;
+  }) => Effect.Effect<void>;
 }>()("ChatRepo", {
   make: Effect.gen(function*() {
     const sql = yield* SqlClient;
@@ -97,6 +114,52 @@ export class ChatRepo extends ServiceMap.Service<ChatRepo, {
       `,
     });
 
+    const startRunQuery = SqlSchema.findOneOption({
+      Request: Schema.Struct({
+        chatId: Chat.ChatId,
+        userId: Schema.String,
+        runId: Chat.RunId,
+        messages: Schema.fromJsonString(Schema.Array(Chat.Message)),
+      }),
+      Result: Schema.Struct({ id: Chat.ChatId }),
+      execute: ({ chatId, userId, runId, messages }) =>
+        sql`
+        UPDATE chats
+        SET messages = ${messages}, active_run_id = ${runId}, updated_at = NOW()
+        WHERE id = ${chatId} AND user_id = ${userId} AND active_run_id IS NULL
+        RETURNING id
+      `,
+    });
+
+    const finishRunQuery = SqlSchema.void({
+      Request: Schema.Struct({
+        chatId: Chat.ChatId,
+        userId: Schema.String,
+        runId: Chat.RunId,
+        messages: Schema.fromJsonString(Schema.Array(Chat.Message)),
+      }),
+      execute: ({ chatId, userId, runId, messages }) =>
+        sql`
+        UPDATE chats
+        SET messages = ${messages}, active_run_id = NULL, updated_at = NOW()
+        WHERE id = ${chatId} AND user_id = ${userId} AND active_run_id = ${runId}
+      `,
+    });
+
+    const clearActiveRunQuery = SqlSchema.void({
+      Request: Schema.Struct({
+        chatId: Chat.ChatId,
+        userId: Schema.String,
+        runId: Chat.RunId,
+      }),
+      execute: ({ chatId, userId, runId }) =>
+        sql`
+        UPDATE chats
+        SET active_run_id = NULL, updated_at = NOW()
+        WHERE id = ${chatId} AND user_id = ${userId} AND active_run_id = ${runId}
+      `,
+    });
+
     return {
       create: ({ userId, title, model }) =>
         insertQuery({
@@ -104,6 +167,7 @@ export class ChatRepo extends ServiceMap.Service<ChatRepo, {
           title,
           model,
           messages: [],
+          activeRunId: null,
         }).pipe(
           Effect.catchTags({
             SchemaError: Effect.die,
@@ -157,6 +221,31 @@ export class ChatRepo extends ServiceMap.Service<ChatRepo, {
 
       updateMessages: ({ chatId, userId, messages }) =>
         updateMessagesQuery({ chatId, userId, messages }).pipe(
+          Effect.catchTags({
+            SchemaError: Effect.die,
+            SqlError: Effect.die,
+          }),
+        ),
+
+      startRun: ({ chatId, userId, runId, messages }) =>
+        startRunQuery({ chatId, userId, runId, messages }).pipe(
+          Effect.catchTags({
+            SchemaError: Effect.die,
+            SqlError: Effect.die,
+          }),
+          Effect.map(Option.isSome),
+        ),
+
+      finishRun: ({ chatId, userId, runId, messages }) =>
+        finishRunQuery({ chatId, userId, runId, messages }).pipe(
+          Effect.catchTags({
+            SchemaError: Effect.die,
+            SqlError: Effect.die,
+          }),
+        ),
+
+      clearActiveRun: ({ chatId, userId, runId }) =>
+        clearActiveRunQuery({ chatId, userId, runId }).pipe(
           Effect.catchTags({
             SchemaError: Effect.die,
             SqlError: Effect.die,

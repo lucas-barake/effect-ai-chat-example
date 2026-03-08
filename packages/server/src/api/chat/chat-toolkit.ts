@@ -2,16 +2,18 @@ import type * as Chat from "@app/domain/api/chat-rpc";
 import * as PubSub from "effect/PubSub";
 import * as Schema from "effect/Schema";
 import * as ServiceMap from "effect/ServiceMap";
+import type * as Take from "effect/Take";
 import * as Tool from "effect/unstable/ai/Tool";
 import * as Toolkit from "effect/unstable/ai/Toolkit";
 
 export class ChatMailbox extends ServiceMap.Service<
   ChatMailbox,
-  PubSub.PubSub<Chat.ChatEvent>
+  PubSub.PubSub<Take.Take<Chat.ChatEvent, typeof Chat.ChatRunTerminalError.Type>>
 >()("ChatMailbox") {}
 
 export const getCurrentDateTime = Tool.make("getCurrentDateTime", {
   description: "Get the current date and time",
+  parameters: Schema.Struct({}),
   success: Schema.String,
   dependencies: [ChatMailbox],
 });
@@ -27,6 +29,7 @@ export const getWeather = Tool.make("getWeather", {
 
 export const fetchRandomJoke = Tool.make("fetchRandomJoke", {
   description: "Fetch a random dad joke",
+  parameters: Schema.Struct({}),
   success: Schema.String,
   failure: Schema.String,
   failureMode: "return",

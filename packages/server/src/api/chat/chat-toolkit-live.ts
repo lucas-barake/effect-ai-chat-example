@@ -17,20 +17,20 @@ export const HandlersLive = ChatToolkit.toLayer(
       getCurrentDateTime: Effect.fnUntraced(function*() {
         const mailbox = yield* ChatMailbox;
 
-        yield* PubSub.publish(mailbox, {
+        yield* PubSub.publish(mailbox, [{
           _tag: "ToolStart",
           toolName: "getCurrentDateTime",
           input: "{}",
-        });
+        }]);
 
         const now = yield* DateTime.now;
         const formatted = DateTime.formatIso(now);
 
-        yield* PubSub.publish(mailbox, {
+        yield* PubSub.publish(mailbox, [{
           _tag: "ToolSuccess",
           toolName: "getCurrentDateTime",
           output: formatted,
-        });
+        }]);
 
         return formatted;
       }),
@@ -38,23 +38,25 @@ export const HandlersLive = ChatToolkit.toLayer(
       getWeather: Effect.fnUntraced(function*(params) {
         const mailbox = yield* ChatMailbox;
 
-        yield* PubSub.publish(mailbox, {
+        yield* PubSub.publish(mailbox, [{
           _tag: "ToolStart",
           toolName: "getWeather",
           input: JSON.stringify(params),
-        });
+        }]);
 
         const result = yield* weatherApi.getForecast(params).pipe(
           Effect.tapError(() =>
-            PubSub.publish(mailbox, { _tag: "ToolFailure", toolName: "getWeather" })
+            PubSub.publish(mailbox, [{ _tag: "ToolFailure", toolName: "getWeather" }]).pipe(
+              Effect.asVoid,
+            )
           ),
         );
 
-        yield* PubSub.publish(mailbox, {
+        yield* PubSub.publish(mailbox, [{
           _tag: "ToolSuccess",
           toolName: "getWeather",
           output: result,
-        });
+        }]);
 
         return result;
       }),
@@ -62,23 +64,25 @@ export const HandlersLive = ChatToolkit.toLayer(
       fetchRandomJoke: Effect.fnUntraced(function*() {
         const mailbox = yield* ChatMailbox;
 
-        yield* PubSub.publish(mailbox, {
+        yield* PubSub.publish(mailbox, [{
           _tag: "ToolStart",
           toolName: "fetchRandomJoke",
           input: "{}",
-        });
+        }]);
 
         const joke = yield* jokeApi.fetchRandom().pipe(
           Effect.tapError(() =>
-            PubSub.publish(mailbox, { _tag: "ToolFailure", toolName: "fetchRandomJoke" })
+            PubSub.publish(mailbox, [{ _tag: "ToolFailure", toolName: "fetchRandomJoke" }]).pipe(
+              Effect.asVoid,
+            )
           ),
         );
 
-        yield* PubSub.publish(mailbox, {
+        yield* PubSub.publish(mailbox, [{
           _tag: "ToolSuccess",
           toolName: "fetchRandomJoke",
           output: joke,
-        });
+        }]);
 
         return joke;
       }),
