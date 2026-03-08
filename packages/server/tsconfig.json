@@ -3,7 +3,7 @@
   "include": [],
   "compilerOptions": {
     "paths": {
-      "@/*": ["./src/*"],
+      "@/*": ["${configDir}/src/*"],
       "@app/domain": ["../domain/src/index.js"],
       "@app/domain/*": ["../domain/src/*.js"]
     }

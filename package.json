@@ -29,6 +29,7 @@
     "overrides": {
       "effect": "4.0.0-beta.25",
       "@effect/platform-browser": "4.0.0-beta.25",
+      "@effect/platform-bun": "4.0.0-beta.25",
       "@effect/platform-node": "4.0.0-beta.25",
       "@effect/sql-pg": "4.0.0-beta.25",
       "@effect/vitest": "4.0.0-beta.25",

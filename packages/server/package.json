@@ -3,12 +3,13 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "tsx watch src/server.ts"
+    "dev": "bun --watch src/server.ts"
   },
   "dependencies": {
     "@app/domain": "workspace:^",
     "@effect/ai-anthropic": "*",
     "@effect/opentelemetry": "*",
+    "@effect/platform-bun": "*",
     "@effect/platform-node": "*",
     "@effect/sql-pg": "*",
     "@opentelemetry/exporter-logs-otlp-http": "^0.210.0",

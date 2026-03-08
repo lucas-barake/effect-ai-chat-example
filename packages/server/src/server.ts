@@ -1,11 +1,10 @@
 import { AppRpc } from "@app/domain/api/app-rpc";
-import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
-import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
+import * as BunHttpServer from "@effect/platform-bun/BunHttpServer";
+import * as BunRuntime from "@effect/platform-bun/BunRuntime";
 import * as Layer from "effect/Layer";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as RpcSerialization from "effect/unstable/rpc/RpcSerialization";
 import * as RpcServer from "effect/unstable/rpc/RpcServer";
-import { createServer } from "node:http";
 import { AuthMiddlewareLive } from "./api/auth-middleware-live.js";
 import { ChatRpcLive } from "./api/chat/chat-rpc-live.js";
 import { UsersRpcLive } from "./api/users-rpc-live.js";
@@ -30,10 +29,10 @@ const AllRoutes = Layer.mergeAll(RpcRouter).pipe(
 );
 
 const ServerLayer = HttpRouter.serve(AllRoutes).pipe(
-  Layer.provide(NodeHttpServer.layer(createServer, { port: 3000 })),
+  Layer.provide(BunHttpServer.layer({ port: 3000 })),
   Layer.provide(TracerLive),
   Layer.provide(MigrationLayer),
   Layer.orDie,
 );
 
-NodeRuntime.runMain(Layer.launch(ServerLayer));
+BunRuntime.runMain(Layer.launch(ServerLayer));
