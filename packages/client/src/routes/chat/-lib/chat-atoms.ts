@@ -5,12 +5,14 @@ import * as BrowserKeyValueStore from "@effect/platform-browser/BrowserKeyValueS
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Pull from "effect/Pull";
+import type { Json } from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as Atom from "effect/unstable/reactivity/Atom";
 import * as AtomRegistry from "effect/unstable/reactivity/AtomRegistry";
 import { accumulateEvent, extractText } from "./chat-accumulator.js";
 import { ChatApi } from "./chat-api.js";
-import type { StreamState, UIMessage } from "./chat-types.js";
+import type { ContentBlock, StreamState, ToolStatus, UIMessage } from "./chat-types.js";
 
 export const runtime = Atom.runtime(ChatApi.layer);
 
@@ -33,31 +35,113 @@ export const clearMessagesAtom = Atom.writable(
   },
 );
 
-const convertPersistedToUIMessage = (msg: Message): UIMessage | null => {
-  if (msg.role === "tool") return null;
-  const content = typeof msg.content === "string"
-    ? msg.content
-    : msg.content
-      .filter((p): p is typeof p & { type: "text"; } => p.type === "text")
-      .map((p) => p.text)
-      .join("");
-  return {
-    id: crypto.randomUUID(),
-    role: msg.role,
-    content,
-    contentBlocks: [],
-    error: null,
-  };
+const convertPersistedMessages = (messages: ReadonlyArray<Message>): readonly UIMessage[] => {
+  const result: UIMessage[] = [];
+  let i = 0;
+
+  while (i < messages.length) {
+    const msg = messages[i]!;
+
+    if (msg.role === "user") {
+      const content = typeof msg.content === "string"
+        ? msg.content
+        : msg.content
+          .filter((p): p is typeof p & { type: "text"; } => p.type === "text")
+          .map((p) => p.text)
+          .join("");
+      result.push({
+        id: crypto.randomUUID(),
+        role: "user",
+        content,
+        contentBlocks: [],
+        error: null,
+      });
+      i++;
+      continue;
+    }
+
+    const contentBlocks: ContentBlock[] = [];
+
+    while (i < messages.length && messages[i]!.role !== "user") {
+      const current = messages[i]!;
+
+      if (current.role === "assistant") {
+        const toolResults = new Map<
+          string,
+          { readonly result: Json; readonly isFailure: boolean; }
+        >();
+        const nextMsg = messages[i + 1];
+        if (nextMsg && nextMsg.role === "tool" && typeof nextMsg.content !== "string") {
+          for (const part of nextMsg.content) {
+            if (part.type === "tool-result") {
+              toolResults.set(part.id, { result: part.result, isFailure: part.isFailure });
+            }
+          }
+        }
+
+        if (typeof current.content === "string") {
+          if (current.content) {
+            contentBlocks.push({ _tag: "text", content: current.content });
+          }
+        } else {
+          for (const part of current.content) {
+            if (part.type === "text") {
+              const last = contentBlocks[contentBlocks.length - 1];
+              if (last && last._tag === "text") {
+                contentBlocks[contentBlocks.length - 1] = {
+                  _tag: "text",
+                  content: last.content + part.text,
+                };
+              } else if (part.text) {
+                contentBlocks.push({ _tag: "text", content: part.text });
+              }
+            } else if (part.type === "tool-call") {
+              const tr = toolResults.get(part.id);
+              const tool: ToolStatus = {
+                id: part.id,
+                toolName: part.name,
+                status: tr ? (tr.isFailure ? "failure" : "success") : "start",
+                input: typeof part.params === "string"
+                  ? part.params
+                  : JSON.stringify(part.params, null, 2),
+                output: tr
+                  ? (typeof tr.result === "string" ? tr.result : JSON.stringify(tr.result, null, 2))
+                  : null,
+              };
+              const last = contentBlocks[contentBlocks.length - 1];
+              if (last && last._tag === "tool_group") {
+                contentBlocks[contentBlocks.length - 1] = {
+                  _tag: "tool_group",
+                  tools: [...last.tools, tool],
+                };
+              } else {
+                contentBlocks.push({ _tag: "tool_group", tools: [tool] });
+              }
+            }
+          }
+        }
+      }
+
+      i++;
+    }
+
+    result.push({
+      id: crypto.randomUUID(),
+      role: "assistant",
+      content: extractText(contentBlocks),
+      contentBlocks,
+      error: null,
+    });
+  }
+
+  return result;
 };
 
 const applyChatSnapshot = (
   registry: AtomRegistry.AtomRegistry,
   chat: { readonly messages: ReadonlyArray<Message>; readonly activeRunId: RunId | null; },
 ) => {
-  const uiMessages = chat.messages
-    .map(convertPersistedToUIMessage)
-    .filter((message): message is UIMessage => message !== null);
-  registry.set(messagesAtom, uiMessages);
+  registry.set(messagesAtom, convertPersistedMessages(chat.messages));
   registry.set(generatingAtom, chat.activeRunId !== null);
 };
 
@@ -84,23 +168,27 @@ const runStream = (
     const api = yield* ChatApi;
     const registry = yield* AtomRegistry.AtomRegistry;
 
+    const onStreamDone = Effect.gen(function*() {
+      registry.set(attachedRunIdAtom, null);
+      if (reloadOnSuccess) {
+        const chatExit = yield* Effect.exit(api.chatGet(chatId));
+        if (chatExit._tag === "Success") {
+          applyChatSnapshot(registry, chatExit.value);
+        } else {
+          registry.set(generatingAtom, false);
+        }
+      } else {
+        registry.set(generatingAtom, false);
+      }
+    });
+
     yield* Effect.addFinalizer(Exit.match({
-      onSuccess: () =>
-        Effect.gen(function*() {
-          registry.set(attachedRunIdAtom, null);
-          if (reloadOnSuccess) {
-            const chatExit = yield* Effect.exit(api.chatGet(chatId));
-            if (chatExit._tag === "Success") {
-              applyChatSnapshot(registry, chatExit.value);
-            } else {
-              registry.set(generatingAtom, false);
-            }
-          } else {
-            registry.set(generatingAtom, false);
-          }
-        }),
-      onFailure: (cause) =>
-        Effect.sync(() => {
+      onSuccess: () => onStreamDone,
+      onFailure: (cause) => {
+        if (Pull.isDoneCause(cause)) {
+          return onStreamDone;
+        }
+        return Effect.sync(() => {
           registry.set(attachedRunIdAtom, null);
           registry.set(generatingAtom, false);
           const messages = registry.get(messagesAtom);
@@ -121,7 +209,8 @@ const runStream = (
               message.id === assistantMsgId ? { ...message, error: cause } : message
             ),
           );
-        }),
+        });
+      },
     }));
 
     return api.chatEvents(runId).pipe(

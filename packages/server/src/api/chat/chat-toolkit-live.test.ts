@@ -14,7 +14,7 @@ import { WeatherApi } from "./weather-api.js";
 
 const makeMailbox = Effect.gen(function*() {
   const mailbox = yield* PubSub.unbounded<
-    Take.Take<Chat.ChatEvent, typeof Chat.ChatRunTerminalError.Type>
+    Take.Take<Chat.ChatEvent>
   >({
     replay: 100,
   });

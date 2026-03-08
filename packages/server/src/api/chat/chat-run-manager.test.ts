@@ -14,6 +14,7 @@ import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as AiError from "effect/unstable/ai/AiError";
+import * as WorkflowEngine from "effect/unstable/workflow/WorkflowEngine";
 import { ChatProcessor } from "./chat-processor.js";
 import { ChatRunManager } from "./chat-run-manager.js";
 
@@ -71,6 +72,7 @@ const makeTestLayer = (
     Layer.provide(aiLayer),
     Layer.provide(repo),
     Layer.provide(ChatProcessor.layer),
+    Layer.provide(WorkflowEngine.layerMemory),
   );
 };
 
@@ -92,7 +94,6 @@ describe("ChatRunManager", () => {
         const chat = mockChat();
 
         const { runId } = yield* mgr.startGeneration({
-          chatId: chat.id,
           chat,
           message: "Hello",
         });
@@ -119,14 +120,12 @@ describe("ChatRunManager", () => {
       const chat = mockChat();
 
       yield* mgr.startGeneration({
-        chatId: chat.id,
         chat,
         message: "First",
       });
       yield* Effect.sleep("50 millis");
 
       const exit = yield* mgr.startGeneration({
-        chatId: chat.id,
         chat,
         message: "Second",
       }).pipe(Effect.exit);
@@ -151,13 +150,12 @@ describe("ChatRunManager", () => {
       }
     }).pipe(Effect.provide(makeTestLayer())));
 
-  it.live("failed generation fails stream with AiError", () =>
+  it.live("failed generation fails stream with defect", () =>
     Effect.gen(function*() {
       const mgr = yield* ChatRunManager;
       const chat = mockChat();
 
       const { runId } = yield* mgr.startGeneration({
-        chatId: chat.id,
         chat,
         message: "Hello",
       });
@@ -166,9 +164,7 @@ describe("ChatRunManager", () => {
       expect(exit._tag).toBe("Failure");
       if (exit._tag === "Failure") {
         expect(
-          exit.cause.reasons.some((reason) =>
-            reason._tag === "Fail" && reason.error._tag === "AiError"
-          ),
+          exit.cause.reasons.some((reason) => reason._tag === "Die"),
         ).toBe(true);
       }
     }).pipe(Effect.provide(makeTestLayer(FailingAiModels))), { timeout: 5000 });
@@ -188,7 +184,6 @@ describe("ChatRunManager", () => {
       const chat = mockChat();
 
       const { runId } = yield* mgr.startGeneration({
-        chatId: chat.id,
         chat,
         message: "Hello",
       });
@@ -215,7 +210,6 @@ describe("ChatRunManager", () => {
       const chat = mockChat();
 
       const { runId } = yield* mgr.startGeneration({
-        chatId: chat.id,
         chat,
         message: "Hello",
       });
@@ -247,7 +241,6 @@ describe("ChatRunManager", () => {
       const chat = mockChat();
 
       const { runId } = yield* mgr.startGeneration({
-        chatId: chat.id,
         chat,
         message: "Hello",
       });
@@ -274,14 +267,12 @@ describe("ChatRunManager", () => {
       const chat = mockChat();
 
       yield* mgr.startGeneration({
-        chatId: chat.id,
         chat,
         message: "Hello",
       });
       yield* Effect.sleep("200 millis");
 
       const second = yield* mgr.startGeneration({
-        chatId: chat.id,
         chat,
         message: "Again",
       });
@@ -311,12 +302,12 @@ describe("ChatRunManager", () => {
         Effect.provide(slowAi),
         Effect.provide(makeMockChatRepo()),
         Effect.provide(ChatProcessor.layer),
+        Effect.provide(WorkflowEngine.layerMemory),
         Scope.provide(scope),
       );
       const chat = mockChat();
 
       yield* mgr.startGeneration({
-        chatId: chat.id,
         chat,
         message: "Hello",
       });

@@ -39,7 +39,6 @@ export const ChatRpcHandler = Chat.ChatRpc.toLayer(
         const chat = yield* chatRepo.findById(payload.chatId, currentUser.id);
 
         return yield* runManager.startGeneration({
-          chatId: payload.chatId,
           chat,
           message: payload.message,
         });

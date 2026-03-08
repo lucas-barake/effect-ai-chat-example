@@ -1,5 +1,4 @@
 import * as Schema from "effect/Schema";
-import * as AiError from "effect/unstable/ai/AiError";
 import * as Rpc from "effect/unstable/rpc/Rpc";
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
 import { ModelFamily } from "../ai-models.js";
@@ -32,9 +31,6 @@ export class GenerationInProgressError extends Schema.TaggedErrorClass<Generatio
   "GenerationInProgressError",
   { chatId: ChatId },
 ) {}
-
-export const ChatRunTerminalError = Schema.Union([AiError.AiError, AiError.AiErrorReason]);
-export const ChatRunError = Schema.Union([ChatRunNotFoundError, ChatRunTerminalError]);
 
 export const ChatWatchEvent = Schema.TaggedStruct("RunChanged", {
   runId: Schema.NullOr(RunId),
@@ -122,7 +118,7 @@ export class ChatEventsRpc extends Rpc.make("chat_events", {
   stream: true,
   payload: { runId: RunId },
   success: ChatEvent,
-  error: ChatRunError,
+  error: ChatRunNotFoundError,
 }) {}
 
 export class ChatWatchRpc extends Rpc.make("chat_watch", {

@@ -8,7 +8,7 @@ import * as Toolkit from "effect/unstable/ai/Toolkit";
 
 export class ChatMailbox extends ServiceMap.Service<
   ChatMailbox,
-  PubSub.PubSub<Take.Take<Chat.ChatEvent, typeof Chat.ChatRunTerminalError.Type>>
+  PubSub.PubSub<Take.Take<Chat.ChatEvent>>
 >()("ChatMailbox") {}
 
 export const getCurrentDateTime = Tool.make("getCurrentDateTime", {
@@ -23,7 +23,6 @@ export const getWeather = Tool.make("getWeather", {
   parameters: Schema.Struct({ latitude: Schema.Number, longitude: Schema.Number }),
   success: Schema.String,
   failure: Schema.String,
-  failureMode: "return",
   dependencies: [ChatMailbox],
 });
 
@@ -32,7 +31,6 @@ export const fetchRandomJoke = Tool.make("fetchRandomJoke", {
   parameters: Schema.Struct({}),
   success: Schema.String,
   failure: Schema.String,
-  failureMode: "return",
   dependencies: [ChatMailbox],
 });
 

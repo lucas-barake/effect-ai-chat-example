@@ -9,15 +9,16 @@ import { AuthMiddlewareLive } from "./api/auth-middleware-live.js";
 import { ChatRpcLive } from "./api/chat/chat-rpc-live.js";
 import { UsersRpcLive } from "./api/users-rpc-live.js";
 import { MigrationLayer } from "./db/migrator.js";
+import { RpcLogger, RpcLoggerLive } from "./lib/rpc-logger.js";
 import { TracerLive } from "./lib/tracer.js";
 
 const RpcRouter = RpcServer.layerHttp({
-  group: AppRpc,
+  group: AppRpc.middleware(RpcLogger),
   path: "/rpc",
 });
 
 const AllRoutes = Layer.mergeAll(RpcRouter).pipe(
-  Layer.provide(Layer.mergeAll(UsersRpcLive, ChatRpcLive, AuthMiddlewareLive)),
+  Layer.provide(Layer.mergeAll(UsersRpcLive, ChatRpcLive, AuthMiddlewareLive, RpcLoggerLive)),
   Layer.provide(RpcSerialization.layerNdjson),
   Layer.provide(
     HttpRouter.cors({

@@ -1,3 +1,23 @@
+diff --git a/dist/unstable/ai/AnthropicStructuredOutput.js b/dist/unstable/ai/AnthropicStructuredOutput.js
+index e7b0cc7b57d15d8df3aae06ea436b6a00e6e2db0..a8fab75f828de66d03199e52aa47f0182067c5d8 100644
+--- a/dist/unstable/ai/AnthropicStructuredOutput.js
++++ b/dist/unstable/ai/AnthropicStructuredOutput.js
+@@ -55,6 +55,15 @@ export function toCodecAnthropic(schema) {
+   if (Object.keys(document.definitions).length > 0) {
+     jsonSchema.$defs = document.definitions;
+   }
++  if ("anyOf" in jsonSchema && !("type" in jsonSchema)) {
++    const anyOf = jsonSchema.anyOf;
++    if (anyOf?.some((s) => s.type === "object") && anyOf?.some((s) => s.type === "array")) {
++      delete jsonSchema.anyOf;
++      jsonSchema.type = "object";
++      jsonSchema.properties = {};
++      jsonSchema.required = [];
++    }
++  }
+   return {
+     codec,
+     jsonSchema
 diff --git a/dist/unstable/sql/SqlSchema.d.ts b/dist/unstable/sql/SqlSchema.d.ts
 index c6fd65dc71147d12a7ea2229bdb0c23244910ea3..017f56f4292f630fd337758f13232d60a4b9b77e 100644
 --- a/dist/unstable/sql/SqlSchema.d.ts
@@ -20,6 +40,33 @@ index c6fd65dc71147d12a7ea2229bdb0c23244910ea3..017f56f4292f630fd337758f13232d60
  declare const void_: <Req extends Schema.Top, E, R>(options: {
      readonly Request: Req;
      readonly execute: (request: Req["Encoded"]) => Effect.Effect<unknown, E, R>;
+diff --git a/src/unstable/ai/AnthropicStructuredOutput.ts b/src/unstable/ai/AnthropicStructuredOutput.ts
+index 3afdd7c01500872cf2191cdfd71a8890b4057560..69ad9f5efee0beb51c2e1cbf6f2ae2ff1eb05a47 100644
+--- a/src/unstable/ai/AnthropicStructuredOutput.ts
++++ b/src/unstable/ai/AnthropicStructuredOutput.ts
+@@ -58,11 +58,20 @@ export function toCodecAnthropic<T, E, RD, RE>(
+   const from = recur(AST.toEncoded(to))
+   const codec = from === to ? schema : Schema.make<typeof schema>(AST.decodeTo(from, to, Transformation.passthrough()))
+   const document = Schema.toJsonSchemaDocument(codec)
+-  const jsonSchema = document.schema
++  const jsonSchema = document.schema as Record<string, unknown>
+   if (Object.keys(document.definitions).length > 0) {
+     jsonSchema.$defs = document.definitions
+   }
+-  return { codec, jsonSchema }
++  if ("anyOf" in jsonSchema && !("type" in jsonSchema)) {
++    const anyOf = jsonSchema.anyOf as Array<{ type?: string }>
++    if (anyOf?.some((s) => s.type === "object") && anyOf?.some((s) => s.type === "array")) {
++      delete jsonSchema.anyOf
++      jsonSchema.type = "object"
++      jsonSchema.properties = {}
++      jsonSchema.required = []
++    }
++  }
++  return { codec, jsonSchema: jsonSchema as JsonSchema.JsonSchema }
+ }
+ 
+ function recur(ast: AST.AST): AST.AST {
 diff --git a/src/unstable/sql/SqlSchema.ts b/src/unstable/sql/SqlSchema.ts
 index a84c8f4a0b5d76e5c35b20325eaa50ac167d4446..7f5249eb866120201f57297c0c4cf54ed26594c0 100644
 --- a/src/unstable/sql/SqlSchema.ts

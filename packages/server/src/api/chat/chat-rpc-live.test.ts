@@ -14,6 +14,7 @@ import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as AiError from "effect/unstable/ai/AiError";
 import { RpcTest } from "effect/unstable/rpc";
+import * as WorkflowEngine from "effect/unstable/workflow/WorkflowEngine";
 import { ChatProcessor } from "./chat-processor.js";
 import { ChatRpcHandler } from "./chat-rpc-live.js";
 import { ChatRunManager } from "./chat-run-manager.js";
@@ -92,6 +93,7 @@ const makeRunManagerLayer = (
     Layer.provide(aiLayer),
     Layer.provide(repoLayer),
     Layer.provide(ChatProcessor.layer),
+    Layer.provide(WorkflowEngine.layerMemory),
   );
 
 const TestLayer = Layer.mergeAll(
@@ -248,7 +250,7 @@ describe("ChatRpc", () => {
     { timeout: 5000 },
   );
 
-  it.live("chat_events fails with AiError when generation fails", () => {
+  it.live("chat_events fails with defect when generation fails", () => {
     const FailLayer = Layer.mergeAll(
       ChatRpcHandler.pipe(
         Layer.provide(makeRunManagerLayer(MockChatRepo, DelayedFailingAiModels)),
@@ -268,9 +270,7 @@ describe("ChatRpc", () => {
       expect(exit._tag).toBe("Failure");
       if (exit._tag === "Failure") {
         expect(
-          exit.cause.reasons.some((reason) =>
-            reason._tag === "Fail" && reason.error._tag === "AiError"
-          ),
+          exit.cause.reasons.some((reason) => reason._tag === "Die"),
         ).toBe(true);
       }
     }).pipe(Effect.provide(FailLayer));
