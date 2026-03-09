@@ -6,24 +6,22 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
+import * as KeyValueStore from "effect/unstable/persistence/KeyValueStore";
 import * as Atom from "effect/unstable/reactivity/Atom";
 import * as AtomRegistry from "effect/unstable/reactivity/AtomRegistry";
 import { ChatApi } from "./chat-api.js";
 import {
-  attachedRunIdFamily,
   chatRuntime,
   deleteChatFamily,
   generatingFamily,
   inputFamily,
   interruptFamily,
   messagesFamily,
-  pendingSendFamily,
   preferencesRuntime,
   selectedModelAtom,
   sendMessageFamily,
   watchChatFamily,
 } from "./chat-atoms.js";
-import { ChatPreferences } from "./chat-preferences.js";
 
 addEqualityTesters();
 
@@ -31,6 +29,7 @@ const TEST_CHAT_ID = ChatId.makeUnsafe("a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11");
 const OTHER_CHAT_ID = ChatId.makeUnsafe("a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a13");
 const TEST_RUN_ID = RunId.makeUnsafe("a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a12");
 const OTHER_RUN_ID = RunId.makeUnsafe("a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a14");
+const SELECTED_MODEL_KEY = "@app/chat/selected-model";
 
 const makeChat = ({
   chatId = TEST_CHAT_ID,
@@ -102,21 +101,35 @@ const makePreferencesLayer = (options?: {
   readonly initialModel?: typeof ModelFamily.Type;
   readonly failGet?: boolean;
 }) => {
-  let model = options?.initialModel ?? ("sonnet-4.6" as const);
+  const storage = new Map<string, string>();
+  if (options?.initialModel) {
+    storage.set(SELECTED_MODEL_KEY, JSON.stringify(options.initialModel));
+  }
 
-  const layer = Layer.mock(ChatPreferences)({
-    getSelectedModel: () =>
-      options?.failGet
-        ? Effect.fail("get-failed" as never) as never
-        : Effect.succeed(model) as never,
-    setSelectedModel: (nextModel) =>
-      Effect.sync(() => {
-        model = nextModel;
-      }) as never,
-  });
+  const layer = Layer.succeed(
+    KeyValueStore.KeyValueStore,
+    KeyValueStore.makeStringOnly({
+      get: (key) =>
+        options?.failGet
+          ? Effect.fail("get-failed" as never) as never
+          : Effect.succeed(storage.get(key)),
+      set: (key, value) =>
+        Effect.sync(() => {
+          storage.set(key, value);
+        }),
+      remove: (key) =>
+        Effect.sync(() => {
+          storage.delete(key);
+        }),
+      clear: Effect.sync(() => {
+        storage.clear();
+      }),
+      size: Effect.sync(() => storage.size),
+    }),
+  );
 
   return {
-    getModel: () => model,
+    getModel: () => storage.get(SELECTED_MODEL_KEY),
     layer,
   };
 };
@@ -312,8 +325,10 @@ describe("chat atoms", () => {
     await flush();
 
     expect(calls.chatAsk).toHaveLength(1);
-    expect(registry.get(messagesFamily(TEST_CHAT_ID))).toHaveLength(2);
-    expect(registry.get(pendingSendFamily(TEST_CHAT_ID))).toBe(true);
+    const messages = registry.get(messagesFamily(TEST_CHAT_ID));
+    expect(messages).toHaveLength(2);
+    expect(messages[0]?.content).toBe("hello");
+    expect(messages[1]?.content).toBe("");
 
     Effect.runSync(Deferred.succeed(gate, { runId: TEST_RUN_ID }));
     await flush();
@@ -339,20 +354,182 @@ describe("chat atoms", () => {
     await flush();
 
     expect(calls.chatInterrupt).toEqual([]);
-    expect(registry.get(pendingSendFamily(TEST_CHAT_ID))).toBe(false);
     expect(registry.get(generatingFamily(TEST_CHAT_ID))).toBe(false);
     expect(registry.get(messagesFamily(TEST_CHAT_ID))).toHaveLength(0);
 
     Effect.runSync(Deferred.succeed(gate, { runId: TEST_RUN_ID }));
     await flush();
 
-    expect(registry.get(attachedRunIdFamily(TEST_CHAT_ID))).toBeNull();
+    expect(calls.chatInterrupt).toEqual([TEST_CHAT_ID]);
+    expect(calls.chatEvents).toEqual([]);
+  });
+
+  it("uses persisted chat data for selectors when local state is none", async () => {
+    const { registry } = makeRegistry({
+      chatGet: (chatId) =>
+        Effect.succeed(makeChat({
+          chatId,
+          activeRunId: TEST_RUN_ID,
+          messages: [
+            { role: "user", content: "hello" },
+            { role: "assistant", content: "world" },
+          ],
+        })),
+    });
+
+    registry.mount(messagesFamily(TEST_CHAT_ID));
+    await flush();
+
+    expect(registry.get(messagesFamily(TEST_CHAT_ID)).map((message) => message.content)).toEqual([
+      "hello",
+      "world",
+    ]);
+    expect(registry.get(generatingFamily(TEST_CHAT_ID))).toBe(true);
+  });
+
+  it("keeps completion race overlay when refresh fails", async () => {
+    let chatGetCalls = 0;
+    const { registry } = makeRegistry({
+      chatEvents: () => Stream.make({ _tag: "Chunk", delta: "hi" } as const),
+      chatGet: (chatId) =>
+        Effect.sync(() => {
+          chatGetCalls++;
+          if (chatGetCalls === 1) {
+            return makeChat({ chatId });
+          }
+          throw new Error("refresh failed");
+        }),
+    });
+
+    const sendAtom = sendMessageFamily(TEST_CHAT_ID);
+    registry.mount(sendAtom);
+    registry.set(sendAtom, { message: "hello" });
+    await flush();
+
+    expect(registry.get(messagesFamily(TEST_CHAT_ID)).at(-1)?.content).toBe("hi");
+    expect(registry.get(generatingFamily(TEST_CHAT_ID))).toBe(false);
+  });
+
+  it("keeps completion race overlay when refresh reports same run", async () => {
+    let chatGetCalls = 0;
+    const { registry } = makeRegistry({
+      chatEvents: () => Stream.make({ _tag: "Chunk", delta: "hi" } as const),
+      chatGet: (chatId) =>
+        Effect.sync(() => {
+          chatGetCalls++;
+          return makeChat({
+            chatId,
+            activeRunId: chatGetCalls === 1 ? null : TEST_RUN_ID,
+          });
+        }),
+    });
+
+    const sendAtom = sendMessageFamily(TEST_CHAT_ID);
+    registry.mount(sendAtom);
+    registry.set(sendAtom, { message: "hello" });
+    await flush();
+
+    expect(registry.get(messagesFamily(TEST_CHAT_ID)).at(-1)?.content).toBe("hi");
+    expect(registry.get(generatingFamily(TEST_CHAT_ID))).toBe(false);
+  });
+
+  it("clears completion race overlay when watch reports run cleared", async () => {
+    let chatGetCalls = 0;
+    const { registry } = makeRegistry({
+      chatEvents: () => Stream.make({ _tag: "Chunk", delta: "hi" } as const),
+      chatGet: (chatId) =>
+        Effect.sync(() => {
+          chatGetCalls++;
+          if (chatGetCalls === 1) {
+            return makeChat({ chatId });
+          }
+          if (chatGetCalls === 2) {
+            return makeChat({
+              chatId,
+              activeRunId: TEST_RUN_ID,
+              messages: [
+                { role: "user", content: "hello" },
+                { role: "assistant", content: "hi" },
+              ],
+            });
+          }
+          return makeChat({
+            chatId,
+            messages: [
+              { role: "user", content: "hello" },
+              { role: "assistant", content: "hi" },
+            ],
+          });
+        }),
+      chatWatch: () => Stream.make({ _tag: "RunChanged", runId: null } as const),
+    });
+
+    const sendAtom = sendMessageFamily(TEST_CHAT_ID);
+    const watchAtom = watchChatFamily(TEST_CHAT_ID);
+    registry.mount(sendAtom);
+    registry.mount(watchAtom);
+    registry.set(sendAtom, { message: "hello" });
+    await flush();
+    registry.set(watchAtom, { activeRunId: null });
+    await flush();
+
+    expect(registry.get(messagesFamily(TEST_CHAT_ID)).map((message) => message.content)).toEqual([
+      "hello",
+      "hi",
+    ]);
+    expect(registry.get(generatingFamily(TEST_CHAT_ID))).toBe(false);
+  });
+
+  it("chains into the next run after completion", async () => {
+    let chatGetCalls = 0;
+    const { calls, registry } = makeRegistry({
+      chatEvents: (runId) =>
+        runId === TEST_RUN_ID
+          ? Stream.make({ _tag: "Chunk", delta: "first" } as const)
+          : Stream.never,
+      chatGet: (chatId) =>
+        Effect.sync(() => {
+          chatGetCalls++;
+          if (chatGetCalls === 1) {
+            return makeChat({ chatId });
+          }
+          return makeChat({
+            chatId,
+            activeRunId: OTHER_RUN_ID,
+            messages: [
+              { role: "user", content: "hello" },
+              { role: "assistant", content: "done" },
+            ],
+          });
+        }),
+    });
+
+    const sendAtom = sendMessageFamily(TEST_CHAT_ID);
+    registry.mount(sendAtom);
+    registry.set(sendAtom, { message: "hello" });
+    await flush();
+
+    expect(calls.chatEvents).toEqual([TEST_RUN_ID, OTHER_RUN_ID]);
+    expect(registry.get(generatingFamily(TEST_CHAT_ID))).toBe(true);
+    expect(registry.get(messagesFamily(TEST_CHAT_ID)).map((message) => message.content)).toEqual([
+      "hello",
+      "done",
+      "",
+    ]);
+
+    registry.set(sendAtom, Atom.Interrupt);
+    await flush();
   });
 
   it("attaches an active run from the watcher", async () => {
     const { calls, registry } = makeRegistry({
       chatEvents: () => Stream.never,
-      chatGet: (chatId) => Effect.succeed(makeChat({ chatId, activeRunId: TEST_RUN_ID })),
+      chatGet: (chatId) =>
+        Effect.succeed(makeChat({
+          chatId,
+          activeRunId: TEST_RUN_ID,
+          messages: [{ role: "user", content: "hello" }],
+        })),
       chatWatch: () => Stream.never,
     });
 
@@ -363,12 +540,54 @@ describe("chat atoms", () => {
 
     expect(calls.chatWatch).toEqual([TEST_CHAT_ID]);
     expect(calls.chatEvents).toEqual([TEST_RUN_ID]);
+    expect(registry.get(generatingFamily(TEST_CHAT_ID))).toBe(true);
+    expect(registry.get(messagesFamily(TEST_CHAT_ID)).map((message) => message.content)).toEqual([
+      "hello",
+      "",
+    ]);
 
     registry.set(watchAtom, Atom.Interrupt);
     await flush();
   });
 
-  it("selectedModelAtom falls back to sonnet-4.6 on preference read failure", async () => {
+  it("resumes the same run from overlay without replacing local messages", async () => {
+    let watchEvents = Stream.never as Stream.Stream<ChatWatchEvent, unknown>;
+    const { registry } = makeRegistry({
+      chatEvents: (runId) =>
+        runId === TEST_RUN_ID
+          ? Stream.make({ _tag: "Chunk", delta: "partial" } as const).pipe(
+            Stream.concat(Stream.never),
+          )
+          : Stream.empty,
+      chatGet: (chatId) => Effect.succeed(makeChat({ chatId, activeRunId: TEST_RUN_ID })),
+      chatWatch: () => watchEvents,
+    });
+
+    const sendAtom = sendMessageFamily(TEST_CHAT_ID);
+    const interruptAtom = interruptFamily(TEST_CHAT_ID);
+    const watchAtom = watchChatFamily(TEST_CHAT_ID);
+    registry.mount(sendAtom);
+    registry.mount(interruptAtom);
+    registry.mount(watchAtom);
+
+    registry.set(sendAtom, { message: "hello" });
+    await flush();
+    registry.set(interruptAtom, undefined);
+    await flush();
+
+    expect(registry.get(messagesFamily(TEST_CHAT_ID)).at(-1)?.content).toBe("partial");
+
+    watchEvents = Stream.make({ _tag: "RunChanged", runId: TEST_RUN_ID } as const);
+    registry.set(watchAtom, Atom.Interrupt);
+    await flush();
+    registry.set(watchAtom, { activeRunId: TEST_RUN_ID });
+    await flush();
+
+    expect(registry.get(messagesFamily(TEST_CHAT_ID)).at(-1)?.content).toBe("partial");
+    expect(registry.get(generatingFamily(TEST_CHAT_ID))).toBe(true);
+  });
+
+  it("selectedModelAtom falls back to sonnet-4.6 on storage read failure", async () => {
     const { registry } = makeRegistry({ failGet: true });
 
     registry.mount(selectedModelAtom);
@@ -377,7 +596,7 @@ describe("chat atoms", () => {
     expect(registry.get(selectedModelAtom)).toBe("sonnet-4.6");
   });
 
-  it("selectedModelAtom persists model changes through ChatPreferences", async () => {
+  it("selectedModelAtom persists model changes through KeyValueStore", async () => {
     const { preferences, registry } = makeRegistry({ initialModel: "haiku-4.5" });
 
     registry.mount(selectedModelAtom);
@@ -386,7 +605,7 @@ describe("chat atoms", () => {
     expect(registry.get(selectedModelAtom)).toBe("haiku-4.5");
     registry.set(selectedModelAtom, "sonnet-4.6");
     await flush();
-    expect(preferences.getModel()).toBe("sonnet-4.6");
+    expect(preferences.getModel()).toBe(JSON.stringify("sonnet-4.6"));
   });
 
   it("deleteChatFamily clears local state for only one chat", async () => {

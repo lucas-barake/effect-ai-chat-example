@@ -1,21 +1,25 @@
 import { ModelFamily } from "@app/domain/ai-models";
 import { ChatId, RunId } from "@app/domain/api/chat-rpc";
 import type { ChatEvent, Message } from "@app/domain/api/chat-rpc";
+import * as BrowserKeyValueStore from "@effect/platform-browser/BrowserKeyValueStore";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
+import * as KeyValueStore from "effect/unstable/persistence/KeyValueStore";
 import { AsyncResult } from "effect/unstable/reactivity";
 import * as Atom from "effect/unstable/reactivity/Atom";
 import { accumulateEvent, extractText } from "./chat-accumulator.js";
 import { ChatApi } from "./chat-api.js";
-import { ChatPreferences } from "./chat-preferences.js";
 import type { ContentBlock, StreamState, ToolStatus, UIMessage } from "./chat-types.js";
 
 export const chatRuntime = Atom.runtime(ChatApi.layer);
-export const preferencesRuntime = Atom.runtime(ChatPreferences.layer);
+const preferencesLayer: Layer.Layer<KeyValueStore.KeyValueStore> =
+  BrowserKeyValueStore.layerLocalStorage;
+export const preferencesRuntime = Atom.runtime(preferencesLayer);
 
 type LocalTranscript =
   | { readonly _tag: "None"; }
@@ -42,40 +46,12 @@ type LocalTranscript =
 const localNone: LocalTranscript = { _tag: "None" };
 const localDeleted: LocalTranscript = { _tag: "Deleted" };
 
-const selectedModelDataAtom = preferencesRuntime.atom(
-  Effect.gen(function*() {
-    const preferences = yield* ChatPreferences;
-    return yield* preferences.getSelectedModel().pipe(
-      Effect.catch(() => Effect.succeed("sonnet-4.6" as const)),
-    );
-  }),
-);
-
-const setSelectedModelAtom = preferencesRuntime.fn<ModelFamily>()(
-  Effect.fnUntraced(function*(model) {
-    const preferences = yield* ChatPreferences;
-    yield* preferences.setSelectedModel(model).pipe(
-      Effect.catch(() => Effect.void),
-    );
-    return model;
-  }),
-);
-
-export const selectedModelAtom = Atom.writable(
-  (get) => {
-    get.mount(setSelectedModelAtom);
-    get.subscribe(selectedModelDataAtom, (result) => {
-      if (AsyncResult.isSuccess(result)) {
-        get.setSelf(result.value);
-      }
-    }, { immediate: true });
-    return Option.getOrElse(get.self<typeof ModelFamily.Type>(), () => "sonnet-4.6" as const);
-  },
-  (ctx, value: typeof ModelFamily.Type) => {
-    ctx.set(setSelectedModelAtom, value);
-    ctx.setSelf(value);
-  },
-);
+export const selectedModelAtom = Atom.kvs({
+  runtime: preferencesRuntime,
+  key: "@app/chat/selected-model",
+  schema: ModelFamily,
+  defaultValue: () => "sonnet-4.6" as const,
+});
 
 export const convertPersistedMessages = (
   messages: ReadonlyArray<Message>,
@@ -200,50 +176,38 @@ export const chatDataFamily = Atom.family((chatId: ChatId) =>
   )
 );
 
-const authoritativeMessagesFamily = Atom.family((chatId: ChatId) =>
+const chatViewFamily = Atom.family((chatId: ChatId) =>
   Atom.readable((get) => {
-    const chatResult = get(chatDataFamily(chatId));
-    return AsyncResult.isSuccess(chatResult)
-      ? convertPersistedMessages(chatResult.value.messages)
-      : [];
+    const local = get(localTranscriptFamily(chatId));
+    switch (local._tag) {
+      case "Deleted":
+        return { messages: [], generating: false } as const;
+      case "Sending":
+        return { messages: local.messages, generating: true } as const;
+      case "Streaming":
+        return { messages: local.messages, generating: true } as const;
+      case "Overlay":
+        return { messages: local.messages, generating: false } as const;
+      case "None": {
+        const chatResult = get(chatDataFamily(chatId));
+        if (!AsyncResult.isSuccess(chatResult)) {
+          return { messages: [], generating: false } as const;
+        }
+        return {
+          messages: convertPersistedMessages(chatResult.value.messages),
+          generating: chatResult.value.activeRunId !== null,
+        } as const;
+      }
+    }
   })
 );
 
 export const messagesFamily = Atom.family((chatId: ChatId) =>
-  Atom.readable((get) => {
-    const local = get(localTranscriptFamily(chatId));
-    if (local._tag === "Deleted") {
-      return [];
-    }
-    return local._tag === "None"
-      ? get(authoritativeMessagesFamily(chatId))
-      : local.messages;
-  })
-);
-
-export const pendingSendFamily = Atom.family((chatId: ChatId) =>
-  Atom.readable((get) => get(localTranscriptFamily(chatId))._tag === "Sending")
-);
-
-export const attachedRunIdFamily = Atom.family((chatId: ChatId) =>
-  Atom.readable((get) => {
-    const local = get(localTranscriptFamily(chatId));
-    return local._tag === "Streaming" ? local.runId : null;
-  })
+  Atom.make((get) => get(chatViewFamily(chatId)).messages)
 );
 
 export const generatingFamily = Atom.family((chatId: ChatId) =>
-  Atom.readable((get) => {
-    const local = get(localTranscriptFamily(chatId));
-    if (local._tag === "Sending" || local._tag === "Streaming") {
-      return true;
-    }
-    if (local._tag === "Overlay" || local._tag === "Deleted") {
-      return false;
-    }
-    const chatResult = get(chatDataFamily(chatId));
-    return AsyncResult.isSuccess(chatResult) && chatResult.value.activeRunId !== null;
-  })
+  Atom.make((get) => get(chatViewFamily(chatId)).generating)
 );
 
 const appendAssistantPlaceholder = ({
@@ -274,6 +238,71 @@ const updateAssistantMessage = ({
   readonly assistantMsgId: string;
   readonly updater: (message: UIMessage) => UIMessage;
 }) => messages.map((message) => message.id === assistantMsgId ? updater(message) : message);
+
+const makeStreamingTranscript = ({
+  runId,
+  messages,
+}: {
+  readonly runId: RunId;
+  readonly messages: readonly UIMessage[];
+}): LocalTranscript => {
+  const next = appendAssistantPlaceholder({ messages });
+  return {
+    _tag: "Streaming",
+    runId,
+    assistantMsgId: next.assistantMsgId,
+    messages: next.messages,
+  };
+};
+
+const makeInterruptedOverlay = ({
+  local,
+}: {
+  readonly local: Extract<LocalTranscript, { readonly _tag: "Streaming"; }>;
+}): LocalTranscript => ({
+  _tag: "Overlay",
+  reason: "interrupted",
+  runId: local.runId,
+  assistantMsgId: local.assistantMsgId,
+  messages: updateAssistantMessage({
+    messages: local.messages,
+    assistantMsgId: local.assistantMsgId,
+    updater: (message) => ({
+      ...message,
+      content: message.content || "(interrupted)",
+    }),
+  }),
+});
+
+const makeFailureOverlay = ({
+  local,
+  cause,
+}: {
+  readonly local: Extract<LocalTranscript, { readonly _tag: "Streaming"; }>;
+  readonly cause: Cause.Cause<unknown>;
+}): LocalTranscript => ({
+  _tag: "Overlay",
+  reason: "failure",
+  runId: local.runId,
+  assistantMsgId: local.assistantMsgId,
+  messages: updateAssistantMessage({
+    messages: local.messages,
+    assistantMsgId: local.assistantMsgId,
+    updater: (message) => ({ ...message, error: cause }),
+  }),
+});
+
+const makeCompletionRaceOverlay = ({
+  local,
+}: {
+  readonly local: Extract<LocalTranscript, { readonly _tag: "Streaming"; }>;
+}): LocalTranscript => ({
+  _tag: "Overlay",
+  reason: "completion-race",
+  runId: local.runId,
+  assistantMsgId: local.assistantMsgId,
+  messages: local.messages,
+});
 
 const refreshChat = Effect.fnUntraced(function*({
   get,
@@ -353,37 +382,23 @@ const runStream = Effect.fnUntraced(function*({
 
           const refreshExit = yield* Effect.exit(refreshChat({ get, chatId }));
           if (refreshExit._tag === "Failure") {
-            get.set(localTranscriptFamily(chatId), {
-              _tag: "Overlay",
-              reason: "completion-race",
-              runId,
-              assistantMsgId: local.assistantMsgId,
-              messages: local.messages,
-            });
+            get.set(localTranscriptFamily(chatId), makeCompletionRaceOverlay({ local }));
             return;
           }
 
           if (refreshExit.value.activeRunId === runId) {
-            get.set(localTranscriptFamily(chatId), {
-              _tag: "Overlay",
-              reason: "completion-race",
-              runId,
-              assistantMsgId: local.assistantMsgId,
-              messages: local.messages,
-            });
+            get.set(localTranscriptFamily(chatId), makeCompletionRaceOverlay({ local }));
             return;
           }
 
           if (refreshExit.value.activeRunId !== null) {
-            const next = appendAssistantPlaceholder({
-              messages: convertPersistedMessages(refreshExit.value.messages),
-            });
-            get.set(localTranscriptFamily(chatId), {
-              _tag: "Streaming",
-              runId: refreshExit.value.activeRunId,
-              assistantMsgId: next.assistantMsgId,
-              messages: next.messages,
-            });
+            get.set(
+              localTranscriptFamily(chatId),
+              makeStreamingTranscript({
+                runId: refreshExit.value.activeRunId,
+                messages: convertPersistedMessages(refreshExit.value.messages),
+              }),
+            );
             get.mount(attachRunFamily(chatId));
             get.set(attachRunFamily(chatId), { runId: refreshExit.value.activeRunId });
             return;
@@ -398,28 +413,12 @@ const runStream = Effect.fnUntraced(function*({
             return;
           }
 
-          const nextMessages = Cause.hasInterruptsOnly(cause)
-            ? updateAssistantMessage({
-              messages: local.messages,
-              assistantMsgId: local.assistantMsgId,
-              updater: (message) => ({
-                ...message,
-                content: message.content || "(interrupted)",
-              }),
-            })
-            : updateAssistantMessage({
-              messages: local.messages,
-              assistantMsgId: local.assistantMsgId,
-              updater: (message) => ({ ...message, error: cause }),
-            });
-
-          get.set(localTranscriptFamily(chatId), {
-            _tag: "Overlay",
-            reason: Cause.hasInterruptsOnly(cause) ? "interrupted" : "failure",
-            runId,
-            assistantMsgId: local.assistantMsgId,
-            messages: nextMessages,
-          });
+          get.set(
+            localTranscriptFamily(chatId),
+            Cause.hasInterruptsOnly(cause)
+              ? makeInterruptedOverlay({ local })
+              : makeFailureOverlay({ local, cause }),
+          );
           get.refresh(chatDataFamily(chatId));
         }),
     })),
@@ -546,15 +545,13 @@ export const watchChatFamily = Atom.family((chatId: ChatId) =>
           return;
         }
 
-        const next = appendAssistantPlaceholder({
-          messages: convertPersistedMessages(chat.messages),
-        });
-        get.set(localTranscriptFamily(chatId), {
-          _tag: "Streaming",
-          runId,
-          assistantMsgId: next.assistantMsgId,
-          messages: next.messages,
-        });
+        get.set(
+          localTranscriptFamily(chatId),
+          makeStreamingTranscript({
+            runId,
+            messages: convertPersistedMessages(chat.messages),
+          }),
+        );
         get.set(attachRunFamily(chatId), { runId });
       });
 
@@ -631,20 +628,7 @@ export const interruptFamily = Atom.family((chatId: ChatId) =>
       }
 
       if (local._tag === "Streaming") {
-        get.set(localTranscriptFamily(chatId), {
-          _tag: "Overlay",
-          reason: "interrupted",
-          runId: local.runId,
-          assistantMsgId: local.assistantMsgId,
-          messages: updateAssistantMessage({
-            messages: local.messages,
-            assistantMsgId: local.assistantMsgId,
-            updater: (message) => ({
-              ...message,
-              content: message.content || "(interrupted)",
-            }),
-          }),
-        });
+        get.set(localTranscriptFamily(chatId), makeInterruptedOverlay({ local }));
       }
 
       const api = yield* ChatApi;
