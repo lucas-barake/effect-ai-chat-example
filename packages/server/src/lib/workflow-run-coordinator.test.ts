@@ -8,7 +8,7 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as Workflow from "effect/unstable/workflow/Workflow";
 import * as WorkflowEngine from "effect/unstable/workflow/WorkflowEngine";
-import { makeWorkflowRunCoordinator } from "./workflow-run-coordinator.js";
+import { WorkflowRunCoordinator } from "./workflow-run-coordinator.js";
 
 class BusyError extends Schema.TaggedErrorClass<BusyError>()("BusyError", {
   ownerId: Schema.String,
@@ -41,7 +41,7 @@ const makeCoordinator = (options: {
   readonly finalizeGate?: Deferred.Deferred<void>;
   readonly finalizeStarted?: Deferred.Deferred<void>;
 }) =>
-  makeWorkflowRunCoordinator<
+  WorkflowRunCoordinator.make<
     string,
     string,
     { readonly _tag: "Value"; readonly value: string; },
@@ -98,7 +98,7 @@ const makeCoordinator = (options: {
       }),
   });
 
-describe("makeWorkflowRunCoordinator", () => {
+describe("WorkflowRunCoordinator.make", () => {
   it.live("changes emit start and finish transitions", () =>
     Effect.gen(function*() {
       const gate = yield* Deferred.make<void>();

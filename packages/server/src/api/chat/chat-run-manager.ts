@@ -1,7 +1,7 @@
 import { ChatModel } from "@/db/chat-model.js";
 import { ChatRepo } from "@/db/chat-repo.js";
 import { AiModels } from "@/lib/ai-models.js";
-import { makeWorkflowRunCoordinator } from "@/lib/workflow-run-coordinator.js";
+import { WorkflowRunCoordinator } from "@/lib/workflow-run-coordinator.js";
 import * as Chat from "@app/domain/api/chat-rpc";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -45,7 +45,7 @@ export class ChatRunManager extends ServiceMap.Service<
     const processor = yield* ChatProcessor;
     const chatRepo = yield* ChatRepo;
 
-    const runs = yield* makeWorkflowRunCoordinator<
+    const runs = yield* WorkflowRunCoordinator.make<
       Chat.ChatId,
       Chat.RunId,
       Chat.ChatEvent,
