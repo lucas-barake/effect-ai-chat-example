@@ -1,9 +1,10 @@
+import type { ChatId } from "@app/domain/api/chat-rpc";
 import { useAtomValue } from "@effect/atom-react";
 import { BotIcon } from "lucide-react";
 import * as React from "react";
 import { VList } from "virtua";
 import type { VListHandle } from "virtua";
-import { generatingAtom, messagesAtom } from "./chat-atoms.js";
+import { generatingFamily, messagesFamily } from "./chat-atoms.js";
 import { AssistantMessage, UserBubble } from "./message-bubbles.js";
 
 const SCROLL_THRESHOLD = 50;
@@ -16,9 +17,9 @@ const EmptyState = () => (
   </div>
 );
 
-export const MessageList = () => {
-  const messages = useAtomValue(messagesAtom);
-  const isGenerating = useAtomValue(generatingAtom);
+export const MessageList = ({ chatId }: { readonly chatId: ChatId; }) => {
+  const messages = useAtomValue(messagesFamily(chatId));
+  const isGenerating = useAtomValue(generatingFamily(chatId));
   const ref = React.useRef<VListHandle>(null);
   const shouldStickToBottom = React.useRef(true);
 

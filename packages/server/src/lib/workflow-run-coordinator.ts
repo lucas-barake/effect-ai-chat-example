@@ -1,5 +1,4 @@
 import * as Deferred from "effect/Deferred";
-import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -48,26 +47,79 @@ export const makeWorkflowRunCoordinator = <
   Effect.gen(function*() {
     const workflowEngine = yield* WorkflowEngine.WorkflowEngine;
 
-    const activeOwners = yield* Ref.make(HashMap.empty<OwnerId, RunId>());
-    const runs = yield* Ref.make(
-      HashMap.empty<RunId, {
-        readonly ownerId: OwnerId;
-        readonly metadata: Metadata;
-        readonly executionId: string;
-        readonly interrupt: Deferred.Deferred<void>;
-      }>(),
-    );
+    const state = yield* Ref.make({
+      activeOwners: HashMap.empty<OwnerId, RunId>(),
+      runs: HashMap.empty<
+        RunId,
+        | {
+          readonly _tag: "Preparing";
+          readonly ownerId: OwnerId;
+          readonly interrupt: Deferred.Deferred<void>;
+        }
+        | {
+          readonly _tag: "Active";
+          readonly ownerId: OwnerId;
+          readonly metadata: Metadata;
+          readonly executionId: string;
+          readonly interrupt: Deferred.Deferred<void>;
+        }
+      >(),
+    });
     const ownerChanges = yield* RcMap.make({
       lookup: () => SubscriptionRef.make<RunId | null>(null),
     });
     const eventChannels = yield* RcMap.make({
       lookup: () => PubSub.unbounded<Take.Take<Event, Error["Type"]>>({ replay: Infinity }),
-      idleTimeToLive: Duration.infinity,
     });
 
+    const reserveOwner = (ownerId: OwnerId, runId: RunId) =>
+      Ref.modify(state, (current) => {
+        if (HashMap.has(current.activeOwners, ownerId)) {
+          return [false, current] as const;
+        }
+
+        return [true, {
+          ...current,
+          activeOwners: HashMap.set(current.activeOwners, ownerId, runId),
+        }] as const;
+      });
+
+    const storeRun = (
+      runId: RunId,
+      run:
+        | {
+          readonly _tag: "Preparing";
+          readonly ownerId: OwnerId;
+          readonly interrupt: Deferred.Deferred<void>;
+        }
+        | {
+          readonly _tag: "Active";
+          readonly ownerId: OwnerId;
+          readonly metadata: Metadata;
+          readonly executionId: string;
+          readonly interrupt: Deferred.Deferred<void>;
+        },
+    ) =>
+      Ref.update(state, (current) => ({
+        ...current,
+        runs: HashMap.set(current.runs, runId, run),
+      }));
+
+    const removeRun = (ownerId: OwnerId, runId: RunId) =>
+      Ref.update(state, (current) => ({
+        activeOwners: Option.match(HashMap.get(current.activeOwners, ownerId), {
+          onNone: () => current.activeOwners,
+          onSome: (activeRunId) =>
+            activeRunId === runId
+              ? HashMap.remove(current.activeOwners, ownerId)
+              : current.activeOwners,
+        }),
+        runs: HashMap.remove(current.runs, runId),
+      }));
+
     const lookupRun = (runId: RunId) =>
-      Ref.get(runs).pipe(
-        Effect.map((map) => HashMap.get(map, runId)),
+      Ref.get(state).pipe(
+        Effect.map((current) => HashMap.get(current.runs, runId)),
         Effect.flatMap(
           Option.match({
             onNone: () => Effect.fail(options.missingRun(runId)),
@@ -76,31 +128,46 @@ export const makeWorkflowRunCoordinator = <
         ),
       );
 
+    const lookupActiveRun = (runId: RunId) =>
+      lookupRun(runId).pipe(
+        Effect.flatMap((run) =>
+          run._tag === "Active" ? Effect.succeed(run) : Effect.fail(options.missingRun(runId))
+        ),
+      );
+
+    const cleanupRun = (args: {
+      readonly ownerId: OwnerId;
+      readonly runId: RunId;
+      readonly ownerRef?: SubscriptionRef.SubscriptionRef<RunId | null>;
+    }) =>
+      Effect.gen(function*() {
+        if (args.ownerRef) {
+          yield* SubscriptionRef.modify(args.ownerRef, (current) => [
+            undefined,
+            current === args.runId ? null : current,
+          ]);
+        }
+        yield* removeRun(args.ownerId, args.runId);
+        yield* RcMap.invalidate(eventChannels, args.runId);
+      });
+
     yield* workflowEngine.register(
       options.workflow,
       Effect.fnUntraced(function*(payload) {
         const runId = options.runId(payload);
-        const state = yield* Ref.get(runs).pipe(
-          Effect.map((map) => HashMap.get(map, runId)),
-          Effect.flatMap(
-            Option.match({
-              onNone: () => Effect.die(`missing run state for ${String(runId)}`),
-              onSome: Effect.succeed,
-            }),
-          ),
-        );
+        const run = yield* lookupActiveRun(runId).pipe(Effect.catch((error) => Effect.die(error)));
         const mailbox = yield* RcMap.get(eventChannels, runId);
-        const ownerRef = yield* RcMap.get(ownerChanges, state.ownerId);
+        const ownerRef = yield* RcMap.get(ownerChanges, run.ownerId);
         const workflow = yield* WorkflowInstance;
 
         yield* SubscriptionRef.set(ownerRef, runId);
 
         const exit = yield* Effect.gen(function*() {
-          const runFiber = yield* options.run({ payload, metadata: state.metadata, mailbox }).pipe(
+          const runFiber = yield* options.run({ payload, metadata: run.metadata, mailbox }).pipe(
             Effect.forkScoped,
           );
 
-          yield* Deferred.await(state.interrupt).pipe(
+          yield* Deferred.await(run.interrupt).pipe(
             Effect.andThen(Effect.sync(() => {
               workflow.interrupted = true;
             })),
@@ -115,15 +182,8 @@ export const makeWorkflowRunCoordinator = <
           ? PubSub.publish(mailbox, Exit.void)
           : PubSub.publish(mailbox, Exit.failCause(exit.cause));
 
-        yield* options.finalize({ payload, metadata: state.metadata, exit }).pipe(
-          Effect.ensuring(
-            Effect.gen(function*() {
-              yield* Ref.update(activeOwners, HashMap.remove(state.ownerId));
-              yield* Ref.update(runs, HashMap.remove(runId));
-              yield* SubscriptionRef.set(ownerRef, null);
-              yield* RcMap.invalidate(eventChannels, runId);
-            }),
-          ),
+        yield* options.finalize({ payload, metadata: run.metadata, exit }).pipe(
+          Effect.ensuring(cleanupRun({ ownerId: run.ownerId, runId, ownerRef })),
         );
       }),
     );
@@ -137,15 +197,15 @@ export const makeWorkflowRunCoordinator = <
         ),
 
       resolve: Effect.fnUntraced(function*(runId: RunId) {
-        const state = yield* lookupRun(runId);
+        const run = yield* lookupActiveRun(runId);
         const events = Stream.unwrap(
           RcMap.get(eventChannels, runId).pipe(
             Effect.map((mailbox) => Stream.fromPubSubTake(mailbox)),
           ),
         );
         return {
-          ownerId: state.ownerId,
-          metadata: state.metadata,
+          ownerId: run.ownerId,
+          metadata: run.metadata,
           events,
         } as const;
       }),
@@ -156,50 +216,63 @@ export const makeWorkflowRunCoordinator = <
 
         return yield* Effect.uninterruptible(
           Effect.gen(function*() {
-            const reserved = yield* Ref.modify(activeOwners, (map) => {
-              if (HashMap.has(map, ownerId)) {
-                return [false, map] as const;
-              }
-              return [true, HashMap.set(map, ownerId, runId)] as const;
-            });
+            const reserved = yield* reserveOwner(ownerId, runId);
             if (!reserved) {
               return yield* Effect.fail(options.busy(ownerId));
             }
 
+            const interrupt = yield* Deferred.make<void>();
+            yield* storeRun(runId, { _tag: "Preparing", ownerId, interrupt });
+
             const metadataExit = yield* Effect.exit(options.prepare(payload));
             if (Exit.isFailure(metadataExit)) {
-              yield* Ref.update(activeOwners, HashMap.remove(ownerId));
+              yield* cleanupRun({ ownerId, runId });
               return yield* Effect.failCause(metadataExit.cause);
             }
 
-            const interrupt = yield* Deferred.make<void>();
-            const executionId = yield* options.workflow.executionId(payload);
-            yield* Ref.update(
-              runs,
-              HashMap.set(runId, { ownerId, metadata: metadataExit.value, executionId, interrupt }),
+            const activeRun = {
+              _tag: "Active" as const,
+              ownerId,
+              metadata: metadataExit.value,
+              executionId: yield* options.workflow.executionId(payload),
+              interrupt,
+            };
+            yield* storeRun(runId, activeRun);
+
+            const launchExit = yield* Effect.exit(
+              options.workflow.execute(payload, { discard: true }).pipe(
+                Effect.provideService(WorkflowEngine.WorkflowEngine, workflowEngine),
+              ),
             );
-            yield* options.workflow.execute(payload, { discard: true }).pipe(
-              Effect.provideService(WorkflowEngine.WorkflowEngine, workflowEngine),
-            );
+            if (Exit.isFailure(launchExit)) {
+              yield* options.finalize({
+                payload,
+                metadata: activeRun.metadata,
+                exit: Exit.failCause(launchExit.cause),
+              }).pipe(Effect.ensuring(cleanupRun({ ownerId, runId })));
+              return yield* Effect.failCause(launchExit.cause);
+            }
+
             return { runId } as const;
           }),
         );
       }),
 
       interrupt: Effect.fnUntraced(function*(ownerId: OwnerId) {
-        const activeRun = yield* Ref.get(activeOwners).pipe(
-          Effect.map((map) => HashMap.get(map, ownerId)),
-        );
+        const current = yield* Ref.get(state);
+        const activeRun = HashMap.get(current.activeOwners, ownerId);
         if (Option.isNone(activeRun)) {
           return;
         }
 
-        const state = yield* Ref.get(runs).pipe(
-          Effect.map((map) => HashMap.get(map, activeRun.value)),
-        );
-        if (Option.isSome(state)) {
-          yield* workflowEngine.interrupt(options.workflow, state.value.executionId);
-          yield* Deferred.succeed(state.value.interrupt, undefined);
+        const run = HashMap.get(current.runs, activeRun.value);
+        if (Option.isNone(run)) {
+          return;
+        }
+
+        yield* Deferred.succeed(run.value.interrupt, undefined);
+        if (run.value._tag === "Active") {
+          yield* workflowEngine.interrupt(options.workflow, run.value.executionId);
         }
       }),
     } as const;

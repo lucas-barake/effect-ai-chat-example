@@ -3,23 +3,19 @@ import { useAtom, useAtomSet, useAtomValue } from "@effect/atom-react";
 import { ArrowUpIcon, StopCircleIcon } from "lucide-react";
 import * as React from "react";
 import { Button } from "react-aria-components";
-import { generatingAtom, inputAtom, interruptAtom, sendMessageAtom } from "./chat-atoms.js";
+import { generatingFamily, inputFamily, interruptFamily, sendMessageFamily } from "./chat-atoms.js";
 
 export const ChatInput = ({ chatId }: { readonly chatId: ChatId; }) => {
-  const [input, setInput] = useAtom(inputAtom);
-  const isGenerating = useAtomValue(generatingAtom);
-  const sendMessage = useAtomSet(sendMessageAtom);
-  const interrupt = useAtomSet(interruptAtom);
+  const [input, setInput] = useAtom(inputFamily(chatId));
+  const isGenerating = useAtomValue(generatingFamily(chatId));
+  const sendMessage = useAtomSet(sendMessageFamily(chatId));
+  const interrupt = useAtomSet(interruptFamily(chatId));
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
 
   const handleSubmit = () => {
     const trimmed = input.trim();
     if (!trimmed || isGenerating) return;
-    sendMessage({ chatId, message: trimmed });
-    setInput("");
-    if (textareaRef.current) {
-      textareaRef.current.style.height = "auto";
-    }
+    sendMessage({ message: trimmed });
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -35,6 +31,12 @@ export const ChatInput = ({ chatId }: { readonly chatId: ChatId; }) => {
     textarea.style.height = "auto";
     textarea.style.height = Math.min(textarea.scrollHeight, 200) + "px";
   };
+
+  React.useEffect(() => {
+    if (input === "" && textareaRef.current) {
+      textareaRef.current.style.height = "auto";
+    }
+  }, [input]);
 
   return (
     <div className="p-4">
@@ -53,7 +55,7 @@ export const ChatInput = ({ chatId }: { readonly chatId: ChatId; }) => {
             ? (
               <Button
                 onPress={() => {
-                  interrupt(chatId);
+                  interrupt(undefined);
                 }}
                 className="p-2 rounded-lg bg-danger/20 text-danger hover:bg-danger/30 transition-colors cursor-pointer"
               >

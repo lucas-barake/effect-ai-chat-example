@@ -1,4 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
+import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -26,14 +27,20 @@ const TestWorkflow = Workflow.make({
   payload: {
     ownerId: Schema.String,
     runId: Schema.String,
-    mode: Schema.Literals(["success", "wait"]),
+    mode: Schema.Literals(["success", "wait", "prepare-fail", "prepare-wait", "fail"]),
   },
   success: Schema.Void,
   error: RunFailed,
   idempotencyKey: ({ runId }) => runId,
 });
 
-const makeCoordinator = (gate: Deferred.Deferred<void>) =>
+const makeCoordinator = (options: {
+  readonly gate: Deferred.Deferred<void>;
+  readonly prepareGate?: Deferred.Deferred<void>;
+  readonly prepareStarted?: Deferred.Deferred<void>;
+  readonly finalizeGate?: Deferred.Deferred<void>;
+  readonly finalizeStarted?: Deferred.Deferred<void>;
+}) =>
   makeWorkflowRunCoordinator<
     string,
     string,
@@ -51,21 +58,51 @@ const makeCoordinator = (gate: Deferred.Deferred<void>) =>
     runId: (payload) => payload.runId,
     missingRun: (runId) => new MissingRunError({ runId }),
     busy: (ownerId) => new BusyError({ ownerId }),
-    prepare: (payload) => Effect.succeed({ ownerId: payload.ownerId }),
+    prepare: (payload) =>
+      payload.mode === "prepare-fail"
+        ? Effect.fail(new BusyError({ ownerId: payload.ownerId }))
+        : payload.mode === "prepare-wait"
+        ? Effect.gen(function*() {
+          if (options.prepareStarted) {
+            yield* Deferred.succeed(options.prepareStarted, undefined);
+          }
+          if (options.prepareGate) {
+            yield* Deferred.await(options.prepareGate);
+          }
+          return { ownerId: payload.ownerId } as const;
+        })
+        : Effect.succeed({ ownerId: payload.ownerId }),
     run: Effect.fnUntraced(function*({ payload, mailbox }) {
+      if (payload.mode === "prepare-wait") {
+        yield* Deferred.await(options.gate);
+        return;
+      }
+
+      if (payload.mode === "fail") {
+        return yield* Effect.fail(new RunFailed({ message: payload.runId }));
+      }
+
       yield* PubSub.publish(mailbox, [{ _tag: "Value", value: payload.runId }]);
       if (payload.mode === "wait") {
-        yield* Deferred.await(gate);
+        yield* Deferred.await(options.gate);
       }
     }),
-    finalize: () => Effect.void,
+    finalize: () =>
+      Effect.gen(function*() {
+        if (options.finalizeStarted) {
+          yield* Deferred.succeed(options.finalizeStarted, undefined);
+        }
+        if (options.finalizeGate) {
+          yield* Deferred.await(options.finalizeGate);
+        }
+      }),
   });
 
 describe("makeWorkflowRunCoordinator", () => {
   it.live("changes emit start and finish transitions", () =>
     Effect.gen(function*() {
       const gate = yield* Deferred.make<void>();
-      const runs = yield* makeCoordinator(gate);
+      const runs = yield* makeCoordinator({ gate });
 
       const changesFiber = yield* runs.changes("owner-1").pipe(
         Stream.take(2),
@@ -86,7 +123,7 @@ describe("makeWorkflowRunCoordinator", () => {
     () =>
       Effect.gen(function*() {
         const gate = yield* Deferred.make<void>();
-        const runs = yield* makeCoordinator(gate);
+        const runs = yield* makeCoordinator({ gate });
 
         const { runId } = yield* runs.start({ ownerId: "owner-1", runId: "run-1", mode: "wait" });
         const run = yield* runs.resolve(runId);
@@ -108,7 +145,7 @@ describe("makeWorkflowRunCoordinator", () => {
     () =>
       Effect.gen(function*() {
         const gate = yield* Deferred.make<void>();
-        const runs = yield* makeCoordinator(gate);
+        const runs = yield* makeCoordinator({ gate });
 
         yield* runs.start({ ownerId: "owner-1", runId: "run-1", mode: "wait" });
         const error = yield* runs.start({ ownerId: "owner-1", runId: "run-2", mode: "success" })
@@ -119,6 +156,108 @@ describe("makeWorkflowRunCoordinator", () => {
         expect(error._tag).toBe("BusyError");
 
         yield* Deferred.succeed(gate, undefined);
+      }).pipe(Effect.provide(WorkflowEngine.layerMemory)),
+    { timeout: 5000 },
+  );
+
+  it.live(
+    "interrupt fails the active event stream with interrupts only",
+    () =>
+      Effect.gen(function*() {
+        const gate = yield* Deferred.make<void>();
+        const runs = yield* makeCoordinator({ gate });
+
+        const { runId } = yield* runs.start({ ownerId: "owner-1", runId: "run-1", mode: "wait" });
+        const run = yield* runs.resolve(runId);
+        const exitFiber = yield* run.events.pipe(Stream.runDrain, Effect.exit, Effect.forkChild);
+        yield* Effect.yieldNow;
+
+        yield* runs.interrupt("owner-1");
+
+        const exit = yield* Fiber.join(exitFiber);
+        expect(exit._tag).toBe("Failure");
+        if (exit._tag === "Failure") {
+          expect(Cause.hasInterruptsOnly(exit.cause)).toBe(true);
+        }
+      }).pipe(Effect.provide(WorkflowEngine.layerMemory)),
+    { timeout: 5000 },
+  );
+
+  it.live(
+    "prepare failure releases the owner lock",
+    () =>
+      Effect.gen(function*() {
+        const gate = yield* Deferred.make<void>();
+        const runs = yield* makeCoordinator({ gate });
+
+        const error = yield* runs.start({
+          ownerId: "owner-1",
+          runId: "run-1",
+          mode: "prepare-fail",
+        }).pipe(Effect.flip);
+        expect(error._tag).toBe("BusyError");
+
+        const second = yield* runs.start({ ownerId: "owner-1", runId: "run-2", mode: "success" });
+        expect(second).toEqual({ runId: "run-2" });
+      }).pipe(Effect.provide(WorkflowEngine.layerMemory)),
+    { timeout: 5000 },
+  );
+
+  it.live(
+    "interrupt during prepare cancels the run and releases the owner lock",
+    () =>
+      Effect.gen(function*() {
+        const gate = yield* Deferred.make<void>();
+        const prepareGate = yield* Deferred.make<void>();
+        const prepareStarted = yield* Deferred.make<void>();
+        const runs = yield* makeCoordinator({ gate, prepareGate, prepareStarted });
+
+        const startFiber = yield* runs.start({
+          ownerId: "owner-1",
+          runId: "run-1",
+          mode: "prepare-wait",
+        }).pipe(
+          Effect.forkChild,
+        );
+
+        yield* Deferred.await(prepareStarted);
+        yield* runs.interrupt("owner-1");
+        yield* Deferred.succeed(prepareGate, undefined);
+
+        const started = yield* Fiber.join(startFiber);
+        expect(started).toEqual({ runId: "run-1" });
+
+        yield* Effect.sleep("50 millis");
+
+        const missing = yield* runs.resolve("run-1").pipe(Effect.flip);
+        expect(missing._tag).toBe("MissingRunError");
+
+        const second = yield* runs.start({ ownerId: "owner-1", runId: "run-2", mode: "success" });
+        expect(second).toEqual({ runId: "run-2" });
+      }).pipe(Effect.provide(WorkflowEngine.layerMemory)),
+    { timeout: 5000 },
+  );
+
+  it.live(
+    "run failure releases the owner lock and removes the run entry",
+    () =>
+      Effect.gen(function*() {
+        const gate = yield* Deferred.make<void>();
+        const runs = yield* makeCoordinator({ gate });
+
+        const { runId } = yield* runs.start({ ownerId: "owner-1", runId: "run-1", mode: "fail" });
+        const exit = yield* runs.resolve(runId).pipe(
+          Effect.flatMap((run) => run.events.pipe(Stream.runDrain, Effect.exit)),
+        );
+        expect(exit._tag).toBe("Failure");
+
+        yield* Effect.sleep("50 millis");
+
+        const missing = yield* runs.resolve(runId).pipe(Effect.flip);
+        expect(missing._tag).toBe("MissingRunError");
+
+        const second = yield* runs.start({ ownerId: "owner-1", runId: "run-2", mode: "success" });
+        expect(second).toEqual({ runId: "run-2" });
       }).pipe(Effect.provide(WorkflowEngine.layerMemory)),
     { timeout: 5000 },
   );

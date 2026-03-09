@@ -1,11 +1,12 @@
 import type { ModelFamily } from "@app/domain/ai-models";
+import type { ChatId } from "@app/domain/api/chat-rpc";
 import { useAtom, useAtomRefresh, useAtomSet, useAtomValue } from "@effect/atom-react";
 import { Link, useNavigate, useParams } from "@tanstack/react-router";
 import { AsyncResult } from "effect/unstable/reactivity";
 import { ChevronDownIcon, Loader2Icon, MessageSquarePlusIcon, Trash2Icon } from "lucide-react";
 import * as React from "react";
 import { Button, ListBox, ListBoxItem, Popover, Select, SelectValue } from "react-aria-components";
-import { chatListAtom, createChatAtom, deleteChatAtom, selectedModelAtom } from "./chat-atoms.js";
+import { chatListAtom, createChatAtom, deleteChatFamily, selectedModelAtom } from "./chat-atoms.js";
 
 const MODEL_LABELS: Record<ModelFamily, string> = {
   "sonnet-4.6": "Sonnet 4.6",
@@ -17,7 +18,6 @@ export const ChatSidebar = () => {
   const refreshChatList = useAtomRefresh(chatListAtom);
   const [selectedModel, setSelectedModel] = useAtom(selectedModelAtom);
   const createChat = useAtomSet(createChatAtom, { mode: "promise" });
-  const deleteChat = useAtomSet(deleteChatAtom, { mode: "promise" });
   const navigate = useNavigate();
   const params = useParams({ strict: false });
   const activeChatId = (params as { chatId?: string; }).chatId;
@@ -26,17 +26,6 @@ export const ChatSidebar = () => {
     void createChat({ title: "New chat", model: selectedModel }).then((chat) => {
       refreshChatList();
       void navigate({ to: "/chat/$chatId", params: { chatId: chat.id } });
-    });
-  };
-
-  const handleDelete = (e: React.MouseEvent, chatId: string) => {
-    e.preventDefault();
-    e.stopPropagation();
-    void deleteChat(chatId as never).then(() => {
-      refreshChatList();
-      if (activeChatId === chatId) {
-        void navigate({ to: "/chat" });
-      }
     });
   };
 
@@ -89,29 +78,61 @@ export const ChatSidebar = () => {
           ? <div className="px-3 py-2 text-sm text-danger">Failed to load chats</div>
           : (
             chatListResult.value.items.map((chat) => (
-              <Link
+              <ChatListItem
                 key={chat.id}
-                to="/chat/$chatId"
-                params={{ chatId: chat.id }}
-                className={`group flex items-center justify-between px-3 py-2 rounded-lg text-sm transition-colors ${
-                  activeChatId === chat.id
-                    ? "bg-elevated text-foreground"
-                    : "text-muted hover:text-foreground hover:bg-elevated/50"
-                }`}
-              >
-                <span className="truncate flex-1">{chat.title}</span>
-                <button
-                  onClick={(e) => {
-                    handleDelete(e, chat.id);
-                  }}
-                  className="opacity-0 group-hover:opacity-100 p-1 rounded text-muted hover:text-danger transition-all cursor-pointer"
-                >
-                  <Trash2Icon className="size-3.5" />
-                </button>
-              </Link>
+                activeChatId={activeChatId}
+                chat={chat}
+                onDeleted={refreshChatList}
+                onNavigate={navigate}
+              />
             ))
           )}
       </div>
     </div>
+  );
+};
+
+const ChatListItem = ({
+  chat,
+  activeChatId,
+  onDeleted,
+  onNavigate,
+}: {
+  readonly chat: { readonly id: ChatId; readonly title: string; };
+  readonly activeChatId: string | undefined;
+  readonly onDeleted: () => void;
+  readonly onNavigate: ReturnType<typeof useNavigate>;
+}) => {
+  const deleteChat = useAtomSet(deleteChatFamily(chat.id), { mode: "promise" });
+
+  const handleDelete = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    void deleteChat(undefined).then(() => {
+      onDeleted();
+      if (activeChatId === chat.id) {
+        void onNavigate({ to: "/chat" });
+      }
+    });
+  };
+
+  return (
+    <Link
+      to="/chat/$chatId"
+      params={{ chatId: chat.id }}
+      className={`group flex items-center justify-between px-3 py-2 rounded-lg text-sm transition-colors ${
+        activeChatId === chat.id
+          ? "bg-elevated text-foreground"
+          : "text-muted hover:text-foreground hover:bg-elevated/50"
+      }`}
+    >
+      <span className="truncate flex-1">{chat.title}</span>
+      <button
+        onClick={handleDelete}
+        className="opacity-0 group-hover:opacity-100 p-1 rounded text-muted hover:text-danger transition-all cursor-pointer"
+      >
+        <Trash2Icon className="size-3.5" />
+      </button>
+    </Link>
   );
 };

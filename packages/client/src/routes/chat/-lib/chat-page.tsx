@@ -1,36 +1,32 @@
 import type { ChatId } from "@app/domain/api/chat-rpc";
 import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import { AsyncResult } from "effect/unstable/reactivity";
-import * as Atom from "effect/unstable/reactivity/Atom";
 import { Loader2Icon } from "lucide-react";
 import * as React from "react";
-import { chatAtom, watchChatAtom } from "./chat-atoms.js";
+import { chatDataFamily, watchChatFamily } from "./chat-atoms.js";
 import { ChatInput } from "./chat-input.js";
 import { MessageList } from "./message-list.js";
 
 export const ChatPage = ({ chatId }: { readonly chatId: ChatId; }) => {
+  const chatAtom = chatDataFamily(chatId);
+  const watchAtom = watchChatFamily(chatId);
   const chatResult = useAtomValue(chatAtom);
-  const setChat = useAtomSet(chatAtom);
-  const setWatchChat = useAtomSet(watchChatAtom);
+  const watchResult = useAtomValue(watchAtom);
+  const setWatchChat = useAtomSet(watchAtom);
+
+  const activeRunId = AsyncResult.isSuccess(chatResult)
+    ? chatResult.value.activeRunId
+    : undefined;
 
   React.useEffect(() => {
-    setChat(chatId);
-    return () => {
-      setWatchChat(Atom.Interrupt);
-    };
-  }, [chatId, setChat, setWatchChat]);
-
-  React.useEffect(() => {
-    if (!AsyncResult.isSuccess(chatResult)) {
+    if (activeRunId === undefined) {
       return;
     }
-
-    setWatchChat({ chatId, activeRunId: chatResult.value.activeRunId });
-
-    return () => {
-      setWatchChat(Atom.Interrupt);
-    };
-  }, [chatId, chatResult, setWatchChat]);
+    if (!AsyncResult.isInitial(watchResult) && !AsyncResult.isFailure(watchResult)) {
+      return;
+    }
+    setWatchChat({ activeRunId });
+  }, [activeRunId, setWatchChat, watchResult]);
 
   if (
     AsyncResult.isInitial(chatResult) || (chatResult.waiting && !AsyncResult.isSuccess(chatResult))
@@ -58,7 +54,7 @@ export const ChatPage = ({ chatId }: { readonly chatId: ChatId; }) => {
           {chatResult.value.model}
         </span>
       </div>
-      <MessageList />
+      <MessageList chatId={chatId} />
       <ChatInput chatId={chatId} />
     </div>
   );
