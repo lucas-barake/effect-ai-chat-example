@@ -1,7 +1,7 @@
+import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
-import * as ServiceMap from "effect/ServiceMap";
 import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
@@ -15,7 +15,7 @@ const WeatherResponse = Schema.Struct({
   }),
 });
 
-export class WeatherApi extends ServiceMap.Service<WeatherApi>()("@app/chat/WeatherApi", {
+export class WeatherApi extends Context.Service<WeatherApi>()("@app/chat/WeatherApi", {
   make: Effect.gen(function*() {
     const httpClient = (yield* HttpClient.HttpClient).pipe(
       HttpClient.mapRequest((req) =>

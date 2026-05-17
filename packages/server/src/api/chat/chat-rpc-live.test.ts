@@ -22,7 +22,7 @@ import { ChatRunManager } from "./chat-run-manager.js";
 const mockChat = (
   overrides?: Partial<typeof ChatModel.Type>,
 ): typeof ChatModel.Type => ({
-  id: Chat.ChatId.makeUnsafe("00000000-0000-4000-8000-000000000001"),
+  id: Chat.ChatId.make("00000000-0000-4000-8000-000000000001"),
   userId: "00000000-0000-4000-8000-000000000001",
   title: "Test Chat",
   model: "haiku-4.5",
@@ -135,7 +135,7 @@ describe("ChatRpc", () => {
   it.effect("chat_get returns Chat.WithMessages", () =>
     Effect.gen(function*() {
       const client = yield* RpcTest.makeClient(Chat.ChatRpc);
-      const chatId = Chat.ChatId.makeUnsafe(
+      const chatId = Chat.ChatId.make(
         "00000000-0000-4000-8000-000000000001",
       );
       const result = yield* client.chat_get({ chatId });
@@ -145,7 +145,7 @@ describe("ChatRpc", () => {
   it.effect("chat_delete succeeds", () =>
     Effect.gen(function*() {
       const client = yield* RpcTest.makeClient(Chat.ChatRpc);
-      const chatId = Chat.ChatId.makeUnsafe(
+      const chatId = Chat.ChatId.make(
         "00000000-0000-4000-8000-000000000001",
       );
       yield* client.chat_delete({ chatId });
@@ -154,7 +154,7 @@ describe("ChatRpc", () => {
   it.effect("chat_delete fails with ChatNotFoundError when not found", () =>
     Effect.gen(function*() {
       const client = yield* RpcTest.makeClient(Chat.ChatRpc);
-      const chatId = Chat.ChatId.makeUnsafe(
+      const chatId = Chat.ChatId.make(
         "00000000-0000-4000-8000-000000000099",
       );
       const exit = yield* client.chat_delete({ chatId }).pipe(Effect.exit);
@@ -164,7 +164,7 @@ describe("ChatRpc", () => {
   it.effect("chat_ask fails with ChatNotFoundError for invalid chatId", () =>
     Effect.gen(function*() {
       const client = yield* RpcTest.makeClient(Chat.ChatRpc);
-      const chatId = Chat.ChatId.makeUnsafe(
+      const chatId = Chat.ChatId.make(
         "00000000-0000-4000-8000-000000000099",
       );
       const exit = yield* client.chat_ask({ chatId, message: "Hello" }).pipe(Effect.exit);
@@ -174,7 +174,7 @@ describe("ChatRpc", () => {
   it.effect("chat_ask returns a runId", () =>
     Effect.gen(function*() {
       const client = yield* RpcTest.makeClient(Chat.ChatRpc);
-      const chatId = Chat.ChatId.makeUnsafe(
+      const chatId = Chat.ChatId.make(
         "00000000-0000-4000-8000-000000000001",
       );
       const result = yield* client.chat_ask({ chatId, message: "Hello" });
@@ -193,7 +193,7 @@ describe("ChatRpc", () => {
         listByUser: () => Effect.succeed({ items: [mockChat()], hasMore: false }),
         delete: () => Effect.void,
         updateMessages: ({ messages }) => Ref.set(updatedRef, messages),
-        startRun: () => Effect.succeed(true),
+        startRun: ({ messages }) => Ref.set(updatedRef, messages).pipe(Effect.as(true)),
         finishRun: () => Effect.void,
         clearActiveRun: () => Effect.void,
       });
@@ -206,7 +206,7 @@ describe("ChatRpc", () => {
       );
       return Effect.gen(function*() {
         const client = yield* RpcTest.makeClient(Chat.ChatRpc);
-        const chatId = Chat.ChatId.makeUnsafe(
+        const chatId = Chat.ChatId.make(
           "00000000-0000-4000-8000-000000000001",
         );
 
@@ -237,7 +237,7 @@ describe("ChatRpc", () => {
       );
       return Effect.gen(function*() {
         const client = yield* RpcTest.makeClient(Chat.ChatRpc);
-        const chatId = Chat.ChatId.makeUnsafe(
+        const chatId = Chat.ChatId.make(
           "00000000-0000-4000-8000-000000000001",
         );
 
@@ -260,7 +260,7 @@ describe("ChatRpc", () => {
     );
     return Effect.gen(function*() {
       const client = yield* RpcTest.makeClient(Chat.ChatRpc);
-      const chatId = Chat.ChatId.makeUnsafe(
+      const chatId = Chat.ChatId.make(
         "00000000-0000-4000-8000-000000000001",
       );
 
@@ -295,7 +295,7 @@ describe("ChatRpc", () => {
     );
     return Effect.gen(function*() {
       const client = yield* RpcTest.makeClient(Chat.ChatRpc);
-      const chatId = Chat.ChatId.makeUnsafe(
+      const chatId = Chat.ChatId.make(
         "00000000-0000-4000-8000-000000000001",
       );
 
@@ -320,7 +320,7 @@ describe("ChatRpc", () => {
   it.effect("chat_interrupt is no-op when no generation running", () =>
     Effect.gen(function*() {
       const client = yield* RpcTest.makeClient(Chat.ChatRpc);
-      const chatId = Chat.ChatId.makeUnsafe(
+      const chatId = Chat.ChatId.make(
         "00000000-0000-4000-8000-000000000001",
       );
       yield* client.chat_interrupt({ chatId });

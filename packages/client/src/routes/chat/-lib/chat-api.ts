@@ -1,11 +1,11 @@
 import { DomainRpcClient } from "@/services/rpc-client.js";
 import type { ModelFamily } from "@app/domain/ai-models";
 import type { ChatId, RunId } from "@app/domain/api/chat-rpc";
+import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as ServiceMap from "effect/ServiceMap";
 
-export class ChatApi extends ServiceMap.Service<ChatApi>()("@app/chat/ChatApi", {
+export class ChatApi extends Context.Service<ChatApi>()("@app/chat/ChatApi", {
   make: Effect.gen(function*() {
     const rpc = yield* DomainRpcClient;
     return {

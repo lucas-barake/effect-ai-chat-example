@@ -42,7 +42,7 @@ const TestHandlers = HandlersLive.pipe(
 );
 
 const mockChat = (overrides?: Partial<typeof ChatModel.Type>): typeof ChatModel.Type => ({
-  id: Chat.ChatId.makeUnsafe("00000000-0000-4000-8000-000000000001"),
+  id: Chat.ChatId.make("00000000-0000-4000-8000-000000000001"),
   userId: "user-1",
   title: "Test Chat",
   model: "haiku-4.5",

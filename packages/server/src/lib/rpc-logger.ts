@@ -14,7 +14,7 @@ export const RpcLoggerLive = Layer.succeed(
           Effect.andThen(
             Effect.annotateLogs(Effect.logError(`RPC request failed: ${opts.rpc._tag}`, cause), {
               "rpc.method": opts.rpc._tag,
-              "rpc.clientId": opts.clientId,
+              "rpc.clientId": opts.client.id,
             }),
             exit,
           ),

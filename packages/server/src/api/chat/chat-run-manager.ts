@@ -3,10 +3,10 @@ import { ChatRepo } from "@/db/chat-repo.js";
 import { AiModels } from "@/lib/ai-models.js";
 import { WorkflowRunCoordinator } from "@/lib/workflow-run-coordinator.js";
 import * as Chat from "@app/domain/api/chat-rpc";
+import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
-import * as ServiceMap from "effect/ServiceMap";
 import * as Stream from "effect/Stream";
 import * as Workflow from "effect/unstable/workflow/Workflow";
 import * as WorkflowEngine from "effect/unstable/workflow/WorkflowEngine";
@@ -25,7 +25,7 @@ const ChatGenerationWorkflow = Workflow.make({
   idempotencyKey: ({ runId }) => runId,
 });
 
-export class ChatRunManager extends ServiceMap.Service<
+export class ChatRunManager extends Context.Service<
   ChatRunManager,
   {
     readonly watch: (chatId: Chat.ChatId) => Stream.Stream<Chat.ChatWatchEvent>;
@@ -127,7 +127,7 @@ export class ChatRunManager extends ServiceMap.Service<
 
       startGeneration: Effect.fnUntraced(function*(args) {
         return yield* runs.start({
-          runId: Chat.RunId.makeUnsafe(crypto.randomUUID()),
+          runId: Chat.RunId.make(crypto.randomUUID()),
           chat: args.chat,
           message: args.message,
         });

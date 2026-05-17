@@ -121,18 +121,15 @@ export namespace WorkflowRunCoordinator {
       const lookupRun = (runId: RunId) =>
         Ref.get(state).pipe(
           Effect.map((current) => HashMap.get(current.runs, runId)),
-          Effect.flatMap(
-            Option.match({
-              onNone: () => Effect.fail(options.missingRun(runId)),
-              onSome: Effect.succeed,
-            }),
-          ),
+          Effect.flatMap(Effect.fromOption),
+          Effect.mapError(() => options.missingRun(runId)),
         );
 
       const lookupActiveRun = (runId: RunId) =>
         lookupRun(runId).pipe(
-          Effect.flatMap((run) =>
-            run._tag === "Active" ? Effect.succeed(run) : Effect.fail(options.missingRun(runId))
+          Effect.filterOrFail(
+            (run) => run._tag === "Active",
+            () => options.missingRun(runId),
           ),
         );
 
@@ -143,10 +140,10 @@ export namespace WorkflowRunCoordinator {
       }) =>
         Effect.gen(function*() {
           if (args.ownerRef) {
-            yield* SubscriptionRef.modify(args.ownerRef, (current) => [
-              undefined,
-              current === args.runId ? null : current,
-            ]);
+            yield* SubscriptionRef.updateSome(
+              args.ownerRef,
+              (current) => current === args.runId ? Option.some<RunId | null>(null) : Option.none(),
+            );
           }
           yield* removeRun(args.ownerId, args.runId);
           yield* RcMap.invalidate(eventChannels, args.runId);
@@ -181,9 +178,7 @@ export namespace WorkflowRunCoordinator {
             return yield* Fiber.await(runFiber);
           });
 
-          yield* Exit.isSuccess(exit)
-            ? PubSub.publish(mailbox, Exit.void)
-            : PubSub.publish(mailbox, Exit.failCause(exit.cause));
+          yield* PubSub.publish(mailbox, Exit.asVoid(exit));
 
           yield* options.finalize({ payload, metadata: run.metadata, exit }).pipe(
             Effect.ensuring(cleanupRun({ ownerId: run.ownerId, runId, ownerRef })),
@@ -201,15 +196,14 @@ export namespace WorkflowRunCoordinator {
 
         resolve: Effect.fnUntraced(function*(runId: RunId) {
           const run = yield* lookupActiveRun(runId);
-          const events = Stream.unwrap(
-            RcMap.get(eventChannels, runId).pipe(
-              Effect.map((mailbox) => Stream.fromPubSubTake(mailbox)),
-            ),
-          );
           return {
             ownerId: run.ownerId,
             metadata: run.metadata,
-            events,
+            events: Stream.unwrap(
+              RcMap.get(eventChannels, runId).pipe(
+                Effect.map((mailbox) => Stream.fromPubSubTake(mailbox)),
+              ),
+            ),
           } as const;
         }),
 
@@ -263,12 +257,9 @@ export namespace WorkflowRunCoordinator {
 
         interrupt: Effect.fnUntraced(function*(ownerId: OwnerId) {
           const current = yield* Ref.get(state);
-          const activeRun = HashMap.get(current.activeOwners, ownerId);
-          if (Option.isNone(activeRun)) {
-            return;
-          }
-
-          const run = HashMap.get(current.runs, activeRun.value);
+          const run = HashMap.get(current.activeOwners, ownerId).pipe(
+            Option.flatMap((runId) => HashMap.get(current.runs, runId)),
+          );
           if (Option.isNone(run)) {
             return;
           }

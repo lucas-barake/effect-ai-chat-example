@@ -2,9 +2,9 @@ import type { ModelFamily } from "@app/domain/ai-models";
 import * as AnthropicClient from "@effect/ai-anthropic/AnthropicClient";
 import * as AnthropicLanguageModel from "@effect/ai-anthropic/AnthropicLanguageModel";
 import * as Config from "effect/Config";
+import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as ServiceMap from "effect/ServiceMap";
 import type * as LanguageModel from "effect/unstable/ai/LanguageModel";
 import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
 
@@ -17,10 +17,10 @@ const AnthropicLive = AnthropicClient.layerConfig({
 const SonnetModel = AnthropicLanguageModel.model("claude-sonnet-4-6");
 const HaikuModel = AnthropicLanguageModel.model("claude-haiku-4-5-20251001");
 
-export class AiModels extends ServiceMap.Service<AiModels>()("@app/ai/AiModels", {
+export class AiModels extends Context.Service<AiModels>()("@app/ai/AiModels", {
   make: Effect.gen(function*() {
-    const sonnetModel = yield* SonnetModel;
-    const haikuModel = yield* HaikuModel;
+    const sonnetModel = yield* SonnetModel.captureRequirements;
+    const haikuModel = yield* HaikuModel.captureRequirements;
 
     const getModelLayer = (model: ModelFamily): Layer.Layer<LanguageModel.LanguageModel> => {
       switch (model) {

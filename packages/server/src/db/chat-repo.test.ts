@@ -77,7 +77,7 @@ describe("ChatRepo", () => {
       withTransactionRollback(
         Effect.gen(function*() {
           const repo = yield* ChatRepo;
-          const fakeId = Chat.ChatId.makeUnsafe("00000000-0000-4000-8000-000000000099");
+          const fakeId = Chat.ChatId.make("00000000-0000-4000-8000-000000000099");
           const exit = yield* repo.findById(fakeId, "user-1").pipe(Effect.exit);
           expect(exit._tag).toBe("Failure");
         }),

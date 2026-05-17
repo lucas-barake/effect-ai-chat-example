@@ -1,17 +1,17 @@
 import { ModelFamily } from "@app/domain/ai-models";
 import * as Chat from "@app/domain/api/chat-rpc";
+import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import * as ServiceMap from "effect/ServiceMap";
 import { SqlSchema } from "effect/unstable/sql";
 import { SqlClient } from "effect/unstable/sql/SqlClient";
 import { ChatModel } from "./chat-model.js";
 import { PgLive } from "./pg-live.js";
 
-export class ChatRepo extends ServiceMap.Service<ChatRepo, {
+export class ChatRepo extends Context.Service<ChatRepo, {
   readonly create: (args: {
     readonly userId: string;
     readonly title: string;
@@ -162,13 +162,13 @@ export class ChatRepo extends ServiceMap.Service<ChatRepo, {
 
     return {
       create: ({ userId, title, model }) =>
-        insertQuery({
+        insertQuery(ChatModel.insert.make({
           userId,
           title,
           model,
           messages: [],
           activeRunId: null,
-        }).pipe(
+        })).pipe(
           Effect.catchTags({
             SchemaError: Effect.die,
             SqlError: Effect.die,

@@ -25,10 +25,10 @@ import {
 
 addEqualityTesters();
 
-const TEST_CHAT_ID = ChatId.makeUnsafe("a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11");
-const OTHER_CHAT_ID = ChatId.makeUnsafe("a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a13");
-const TEST_RUN_ID = RunId.makeUnsafe("a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a12");
-const OTHER_RUN_ID = RunId.makeUnsafe("a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a14");
+const TEST_CHAT_ID = ChatId.make("a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11");
+const OTHER_CHAT_ID = ChatId.make("a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a13");
+const TEST_RUN_ID = RunId.make("a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a12");
+const OTHER_RUN_ID = RunId.make("a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a14");
 const SELECTED_MODEL_KEY = "@app/chat/selected-model";
 
 const makeChat = ({

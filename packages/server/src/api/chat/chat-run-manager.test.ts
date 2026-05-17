@@ -19,7 +19,7 @@ import { ChatProcessor } from "./chat-processor.js";
 import { ChatRunManager } from "./chat-run-manager.js";
 
 const mockChat = (overrides?: Partial<typeof ChatModel.Type>): typeof ChatModel.Type => ({
-  id: Chat.ChatId.makeUnsafe("00000000-0000-4000-8000-000000000001"),
+  id: Chat.ChatId.make("00000000-0000-4000-8000-000000000001"),
   userId: "user-1",
   title: "Test Chat",
   model: "haiku-4.5",
@@ -137,7 +137,7 @@ describe("ChatRunManager", () => {
   it.effect("subscribe fails with ChatRunNotFoundError when run is missing", () =>
     Effect.gen(function*() {
       const mgr = yield* ChatRunManager;
-      const runId = Chat.RunId.makeUnsafe("00000000-0000-4000-8000-000000000099");
+      const runId = Chat.RunId.make("00000000-0000-4000-8000-000000000099");
 
       const exit = yield* mgr.subscribe(runId, "user-1").pipe(Stream.runDrain, Effect.exit);
       expect(exit._tag).toBe("Failure");

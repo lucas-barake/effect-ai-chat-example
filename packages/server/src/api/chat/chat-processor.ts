@@ -1,19 +1,19 @@
 import type { ChatModel } from "@/db/chat-model.js";
 import * as Chat from "@app/domain/api/chat-rpc";
 import * as Array from "effect/Array";
+import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Schema from "effect/Schema";
-import * as ServiceMap from "effect/ServiceMap";
 import * as Stream from "effect/Stream";
 import * as AiChat from "effect/unstable/ai/Chat";
 import * as Prompt from "effect/unstable/ai/Prompt";
 import type * as Response from "effect/unstable/ai/Response";
 import { ChatMailbox, ChatToolkit } from "./chat-toolkit.js";
 
-export class ChatProcessor extends ServiceMap.Service<ChatProcessor>()("ChatProcessor", {
+export class ChatProcessor extends Context.Service<ChatProcessor>()("ChatProcessor", {
   make: Effect.succeed({
     run: Effect.fnUntraced(function*(chat: typeof ChatModel.Type, message: string) {
       const mailbox = yield* ChatMailbox;

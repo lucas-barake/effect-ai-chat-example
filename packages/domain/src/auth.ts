@@ -1,5 +1,5 @@
+import * as Context from "effect/Context";
 import * as Schema from "effect/Schema";
-import * as ServiceMap from "effect/ServiceMap";
 import * as RpcMiddleware from "effect/unstable/rpc/RpcMiddleware";
 
 export const UserId = Schema.String.pipe(
@@ -14,7 +14,7 @@ export const CurrentUserSchema = Schema.Struct({
   email: Schema.String,
 });
 
-export class CurrentUser extends ServiceMap.Service<CurrentUser, {
+export class CurrentUser extends Context.Service<CurrentUser, {
   readonly id: UserId;
   readonly name: string;
   readonly email: string;
