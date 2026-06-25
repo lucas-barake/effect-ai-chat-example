@@ -4,7 +4,7 @@ import * as Schema from "effect/Schema";
 import { Model } from "effect/unstable/schema";
 
 export class ChatModel extends Model.Class<ChatModel>("ChatModel")({
-  id: Model.Generated(Chat.ChatId),
+  id: Model.GeneratedByDb(Chat.ChatId),
   userId: Schema.String,
   title: Schema.NonEmptyString,
   model: ModelFamily,

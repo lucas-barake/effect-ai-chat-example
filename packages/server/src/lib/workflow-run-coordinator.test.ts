@@ -22,8 +22,7 @@ class RunFailed extends Schema.TaggedErrorClass<RunFailed>()("RunFailed", {
   message: Schema.String,
 }) {}
 
-const TestWorkflow = Workflow.make({
-  name: "test/WorkflowRunCoordinator",
+const TestWorkflow = Workflow.make("test/WorkflowRunCoordinator", {
   payload: {
     ownerId: Schema.String,
     runId: Schema.String,
