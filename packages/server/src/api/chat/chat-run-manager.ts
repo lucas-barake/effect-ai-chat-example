@@ -14,8 +14,7 @@ import { ChatProcessor } from "./chat-processor.js";
 import { ChatToolkitLive } from "./chat-toolkit-live.js";
 import { ChatMailbox } from "./chat-toolkit.js";
 
-const ChatGenerationWorkflow = Workflow.make({
-  name: "chat/GenerationWorkflow",
+const ChatGenerationWorkflow = Workflow.make("chat/GenerationWorkflow", {
   payload: {
     runId: Chat.RunId,
     chat: ChatModel,
@@ -23,6 +22,103 @@ const ChatGenerationWorkflow = Workflow.make({
   },
   success: Schema.Void,
   idempotencyKey: ({ runId }) => runId,
+});
+
+const makeChatRunManager = Effect.gen(function*() {
+  const aiModels = yield* AiModels;
+  const processor = yield* ChatProcessor;
+  const chatRepo = yield* ChatRepo;
+
+  const runs = yield* WorkflowRunCoordinator.make<
+    Chat.ChatId,
+    Chat.RunId,
+    Chat.ChatEvent,
+    "chat/GenerationWorkflow",
+    typeof ChatGenerationWorkflow.payloadSchema,
+    typeof ChatGenerationWorkflow.successSchema,
+    typeof ChatGenerationWorkflow.errorSchema,
+    { readonly userId: string; },
+    Chat.ChatRunNotFoundError,
+    Chat.GenerationInProgressError
+  >({
+    workflow: ChatGenerationWorkflow,
+
+    ownerId: (payload) => payload.chat.id,
+
+    runId: (payload) => payload.runId,
+
+    missingRun: (runId) => new Chat.ChatRunNotFoundError({ runId }),
+
+    busy: (chatId) => new Chat.GenerationInProgressError({ chatId }),
+
+    prepare: Effect.fnUntraced(function*(payload) {
+      const userMessage: typeof Chat.Message.Type = { role: "user", content: payload.message };
+      const started = yield* chatRepo.startRun({
+        chatId: payload.chat.id,
+        userId: payload.chat.userId,
+        runId: payload.runId,
+        messages: [...payload.chat.messages, userMessage],
+      });
+      if (!started) {
+        return yield* new Chat.GenerationInProgressError({ chatId: payload.chat.id });
+      }
+      return { userId: payload.chat.userId } as const;
+    }),
+
+    run: Effect.fnUntraced(function*({ payload, mailbox }) {
+      const userMessage: typeof Chat.Message.Type = { role: "user", content: payload.message };
+
+      const aiMessages = yield* processor.run(payload.chat, payload.message).pipe(
+        aiModels.use(payload.chat.model),
+        Effect.provide(ChatToolkitLive),
+        Effect.provideService(ChatMailbox, mailbox),
+        Effect.orDie,
+      );
+
+      yield* chatRepo.finishRun({
+        chatId: payload.chat.id,
+        userId: payload.chat.userId,
+        runId: payload.runId,
+        messages: [...payload.chat.messages, userMessage, ...aiMessages],
+      });
+    }),
+
+    finalize: ({ payload }) =>
+      chatRepo.clearActiveRun({
+        chatId: payload.chat.id,
+        userId: payload.chat.userId,
+        runId: payload.runId,
+      }),
+  });
+
+  return {
+    watch: (chatId: Chat.ChatId) =>
+      runs.changes(chatId).pipe(
+        Stream.map((runId) => ({ _tag: "RunChanged" as const, runId })),
+      ),
+
+    subscribe: (runId: Chat.RunId, userId: string) =>
+      Stream.unwrap(
+        runs.resolve(runId).pipe(
+          Effect.flatMap((run) => {
+            if (run.metadata.userId !== userId) {
+              return Effect.fail(new Chat.ChatRunNotFoundError({ runId }));
+            }
+            return Effect.succeed(run.events);
+          }),
+        ),
+      ),
+
+    startGeneration: Effect.fnUntraced(function*(args) {
+      return yield* runs.start({
+        runId: Chat.RunId.make(crypto.randomUUID()),
+        chat: args.chat,
+        message: args.message,
+      });
+    }),
+
+    interrupt: (chatId: Chat.ChatId) => runs.interrupt(chatId),
+  };
 });
 
 export class ChatRunManager extends Context.Service<
@@ -40,106 +136,13 @@ export class ChatRunManager extends Context.Service<
     readonly interrupt: (chatId: Chat.ChatId) => Effect.Effect<void>;
   }
 >()("ChatRunManager", {
-  make: Effect.gen(function*() {
-    const aiModels = yield* AiModels;
-    const processor = yield* ChatProcessor;
-    const chatRepo = yield* ChatRepo;
-
-    const runs = yield* WorkflowRunCoordinator.make<
-      Chat.ChatId,
-      Chat.RunId,
-      Chat.ChatEvent,
-      "chat/GenerationWorkflow",
-      typeof ChatGenerationWorkflow.payloadSchema,
-      typeof ChatGenerationWorkflow.successSchema,
-      typeof ChatGenerationWorkflow.errorSchema,
-      { readonly userId: string; },
-      Chat.ChatRunNotFoundError,
-      Chat.GenerationInProgressError
-    >({
-      workflow: ChatGenerationWorkflow,
-
-      ownerId: (payload) => payload.chat.id,
-
-      runId: (payload) => payload.runId,
-
-      missingRun: (runId) => new Chat.ChatRunNotFoundError({ runId }),
-
-      busy: (chatId) => new Chat.GenerationInProgressError({ chatId }),
-
-      prepare: Effect.fnUntraced(function*(payload) {
-        const userMessage: typeof Chat.Message.Type = { role: "user", content: payload.message };
-        const started = yield* chatRepo.startRun({
-          chatId: payload.chat.id,
-          userId: payload.chat.userId,
-          runId: payload.runId,
-          messages: [...payload.chat.messages, userMessage],
-        });
-        if (!started) {
-          return yield* new Chat.GenerationInProgressError({ chatId: payload.chat.id });
-        }
-        return { userId: payload.chat.userId } as const;
-      }),
-
-      run: Effect.fnUntraced(function*({ payload, mailbox }) {
-        const userMessage: typeof Chat.Message.Type = { role: "user", content: payload.message };
-
-        const aiMessages = yield* processor.run(payload.chat, payload.message).pipe(
-          aiModels.use(payload.chat.model),
-          Effect.provide(ChatToolkitLive),
-          Effect.provideService(ChatMailbox, mailbox),
-          Effect.orDie,
-        );
-
-        yield* chatRepo.finishRun({
-          chatId: payload.chat.id,
-          userId: payload.chat.userId,
-          runId: payload.runId,
-          messages: [...payload.chat.messages, userMessage, ...aiMessages],
-        });
-      }),
-
-      finalize: ({ payload }) =>
-        chatRepo.clearActiveRun({
-          chatId: payload.chat.id,
-          userId: payload.chat.userId,
-          runId: payload.runId,
-        }),
-    });
-
-    return {
-      watch: (chatId) =>
-        runs.changes(chatId).pipe(
-          Stream.map((runId) => ({ _tag: "RunChanged" as const, runId })),
-        ),
-
-      subscribe: (runId, userId) =>
-        Stream.unwrap(
-          runs.resolve(runId).pipe(
-            Effect.flatMap((run) => {
-              if (run.metadata.userId !== userId) {
-                return Effect.fail(new Chat.ChatRunNotFoundError({ runId }));
-              }
-              return Effect.succeed(run.events);
-            }),
-          ),
-        ),
-
-      startGeneration: Effect.fnUntraced(function*(args) {
-        return yield* runs.start({
-          runId: Chat.RunId.make(crypto.randomUUID()),
-          chat: args.chat,
-          message: args.message,
-        });
-      }),
-
-      interrupt: (chatId) => runs.interrupt(chatId),
-    };
-  }),
+  make: makeChatRunManager,
 }) {
+  static make = makeChatRunManager;
+
   static layer: Layer.Layer<ChatRunManager> = Layer.effect(
     this,
-    this.make,
+    makeChatRunManager,
   ).pipe(
     Layer.provide(AiModels.layer),
     Layer.provide(ChatRepo.layer),
