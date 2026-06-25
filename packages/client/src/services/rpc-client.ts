@@ -18,7 +18,7 @@ export class DomainRpcClient extends Context.Service<
       RpcClient.layerProtocolSocket({ retryTransientErrors: true }).pipe(
         Layer.provide([
           BrowserSocket.layerWebSocket("ws://localhost:3000/rpc"),
-          RpcSerialization.layerNdjson,
+          RpcSerialization.layerJson,
         ]),
       ),
     ),

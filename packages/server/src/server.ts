@@ -15,11 +15,12 @@ import { TracerLive } from "./lib/tracer.js";
 const RpcRouter = RpcServer.layerHttp({
   group: AppRpc.middleware(RpcLogger),
   path: "/rpc",
+  protocol: "websocket",
 });
 
 const AllRoutes = Layer.mergeAll(RpcRouter).pipe(
   Layer.provide(Layer.mergeAll(UsersRpcLive, ChatRpcLive, AuthMiddlewareLive, RpcLoggerLive)),
-  Layer.provide(RpcSerialization.layerNdjson),
+  Layer.provide(RpcSerialization.layerJson),
   Layer.provide(
     HttpRouter.cors({
       allowedOrigins: ["*"],
