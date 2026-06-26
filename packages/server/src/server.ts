@@ -7,7 +7,6 @@ import * as RpcSerialization from "effect/unstable/rpc/RpcSerialization";
 import * as RpcServer from "effect/unstable/rpc/RpcServer";
 import { AuthMiddlewareLive } from "./api/auth-middleware-live.js";
 import { ChatRpcLive } from "./api/chat/chat-rpc-live.js";
-import { UsersRpcLive } from "./api/users-rpc-live.js";
 import { RpcLogger, RpcLoggerLive } from "./lib/rpc-logger.js";
 import { TracerLive } from "./lib/tracer.js";
 
@@ -20,7 +19,6 @@ const RpcRouter = RpcServer.layerHttp({
 const AllRoutes = Layer.mergeAll(RpcRouter).pipe(
   Layer.provide(
     Layer.mergeAll(
-      UsersRpcLive,
       ChatRpcLive,
       AuthMiddlewareLive,
       RpcLoggerLive,

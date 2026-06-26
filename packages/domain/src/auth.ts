@@ -8,12 +8,6 @@ export const UserId = Schema.String.pipe(
 );
 export type UserId = typeof UserId.Type;
 
-export const CurrentUserSchema = Schema.Struct({
-  id: UserId,
-  name: Schema.String,
-  email: Schema.String,
-});
-
 export class CurrentUser extends Context.Service<CurrentUser, {
   readonly id: UserId;
   readonly name: string;
