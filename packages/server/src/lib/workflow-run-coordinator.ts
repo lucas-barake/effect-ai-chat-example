@@ -9,6 +9,7 @@ import * as PubSub from "effect/PubSub";
 import * as RcMap from "effect/RcMap";
 import * as Ref from "effect/Ref";
 import type * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import type * as Take from "effect/Take";
@@ -49,9 +50,11 @@ export namespace WorkflowRunCoordinator {
   }) =>
     Effect.gen(function*() {
       const workflowEngine = yield* WorkflowEngine.WorkflowEngine;
+      const coordinatorScope = yield* Effect.scope;
 
       const state = yield* Ref.make({
         activeOwners: HashMap.empty<OwnerId, RunId>(),
+        runIds: new Set<RunId>(),
         runs: HashMap.empty<
           RunId,
           | {
@@ -77,6 +80,14 @@ export namespace WorkflowRunCoordinator {
             replay: Infinity,
           }),
       });
+      const resources = new Map<
+        RunId,
+        {
+          readonly mailbox: PubSub.PubSub<Take.Take<Event, Error["Type"]>>;
+          readonly ownerRef: SubscriptionRef.SubscriptionRef<RunId | null>;
+          readonly completion: Ref.Ref<"Open" | "Completing" | "Done">;
+        }
+      >();
 
       const reserveRun = (
         ownerId: OwnerId,
@@ -84,15 +95,18 @@ export namespace WorkflowRunCoordinator {
         interrupt: Deferred.Deferred<void>,
       ) =>
         Ref.modify(state, (current) => {
-          if (HashMap.has(current.activeOwners, ownerId) || HashMap.has(current.runs, runId)) {
+          if (HashMap.has(current.activeOwners, ownerId) || current.runIds.has(runId)) {
             return [false, current] as const;
           }
 
+          const runIds = new Set(current.runIds);
+          runIds.add(runId);
           return [
             true,
             {
               ...current,
               activeOwners: HashMap.set(current.activeOwners, ownerId, runId),
+              runIds,
               runs: HashMap.set(current.runs, runId, { _tag: "Preparing", ownerId, interrupt }),
             },
           ] as const;
@@ -121,6 +135,7 @@ export namespace WorkflowRunCoordinator {
 
       const removeRun = (ownerId: OwnerId, runId: RunId) =>
         Ref.update(state, (current) => ({
+          ...current,
           activeOwners: Option.match(
             HashMap.get(current.activeOwners, ownerId),
             {
@@ -162,39 +177,90 @@ export namespace WorkflowRunCoordinator {
                 : Option.none());
           }
           yield* removeRun(args.ownerId, args.runId);
+          resources.delete(args.runId);
           yield* RcMap.invalidate(eventChannels, args.runId);
         });
+
+      const completeRun = (args: {
+        readonly payload: Payload["Type"];
+        readonly ownerId: OwnerId;
+        readonly runId: RunId;
+        readonly metadata: Metadata;
+        readonly mailbox: PubSub.PubSub<Take.Take<Event, Error["Type"]>>;
+        readonly ownerRef: SubscriptionRef.SubscriptionRef<RunId | null>;
+        readonly completion: Ref.Ref<"Open" | "Completing" | "Done">;
+        readonly exit: Exit.Exit<Success["Type"], Error["Type"]>;
+      }) => {
+        const finalize = (remaining: number): Effect.Effect<void> =>
+          Effect.exit(options.finalize({
+            payload: args.payload,
+            metadata: args.metadata,
+            exit: args.exit,
+          })).pipe(
+            Effect.flatMap((exit) => {
+              if (Exit.isSuccess(exit)) {
+                return Effect.void;
+              }
+              return remaining > 0
+                ? Effect.yieldNow.pipe(Effect.andThen(finalize(remaining - 1)))
+                : Effect.failCause(exit.cause);
+            }),
+          );
+
+        return Ref.modify(args.completion, (current) =>
+          current === "Open" ? [true, "Completing"] as const : [false, current] as const)
+          .pipe(
+            Effect.flatMap((shouldComplete) =>
+              shouldComplete
+                ? finalize(3).pipe(
+                  Effect.andThen(PubSub.publish(args.mailbox, Exit.asVoid(args.exit))),
+                  Effect.andThen(
+                    cleanupRun({
+                      ownerId: args.ownerId,
+                      runId: args.runId,
+                      ownerRef: args.ownerRef,
+                    }),
+                  ),
+                  Effect.onExit((exit) =>
+                    Ref.set(args.completion, Exit.isFailure(exit) ? "Open" : "Done")
+                  ),
+                )
+                : Effect.void
+            ),
+          );
+      };
 
       yield* workflowEngine.register(
         options.workflow,
         Effect.fnUntraced(function*(payload) {
           const runId = options.runId(payload);
           const run = yield* lookupActiveRun(runId).pipe(
-            Effect.catch((error) => Effect.die(error)),
+            Effect.catch((error) =>
+              Effect.die(error)
+            ),
           );
-          const mailbox = yield* RcMap.get(eventChannels, runId);
-          const ownerRef = yield* RcMap.get(ownerChanges, run.ownerId);
+          const resource = resources.get(runId);
+          if (resource === undefined) {
+            return yield* Effect.die(options.missingRun(runId));
+          }
           const workflow = yield* WorkflowEngine.WorkflowInstance;
-          const completed = yield* Ref.make(false);
-          const completeRun = (exit: Exit.Exit<Success["Type"], Error["Type"]>) =>
-            Ref.modify(completed, (current) => [!current, true] as const).pipe(
-              Effect.flatMap((shouldComplete) =>
-                shouldComplete
-                  ? PubSub.publish(mailbox, Exit.asVoid(exit)).pipe(
-                    Effect.andThen(options.finalize({ payload, metadata: run.metadata, exit })),
-                    Effect.ensuring(cleanupRun({ ownerId: run.ownerId, runId, ownerRef })),
-                  )
-                  : Effect.void
-              ),
-            );
 
           yield* Effect.addFinalizer((exit) =>
             Exit.isFailure(exit)
-              ? completeRun(Exit.failCause(exit.cause as Cause.Cause<Error["Type"]>))
+              ? completeRun({
+                payload,
+                ownerId: run.ownerId,
+                runId,
+                metadata: run.metadata,
+                mailbox: resource.mailbox,
+                ownerRef: resource.ownerRef,
+                completion: resource.completion,
+                exit: Exit.failCause(exit.cause as Cause.Cause<Error["Type"]>),
+              })
               : Effect.void
           );
 
-          yield* SubscriptionRef.set(ownerRef, runId);
+          yield* SubscriptionRef.set(resource.ownerRef, runId);
 
           const runExit = yield* Effect.exit(Effect.gen(function*() {
             if (yield* Deferred.isDone(run.interrupt)) {
@@ -203,7 +269,7 @@ export namespace WorkflowRunCoordinator {
             }
 
             const runFiber = yield* options
-              .run({ payload, metadata: run.metadata, mailbox })
+              .run({ payload, metadata: run.metadata, mailbox: resource.mailbox })
               .pipe(Effect.forkScoped);
 
             yield* Deferred.await(run.interrupt).pipe(
@@ -223,7 +289,16 @@ export namespace WorkflowRunCoordinator {
             onSuccess: (exit) => exit,
           });
 
-          yield* completeRun(exit);
+          yield* completeRun({
+            payload,
+            ownerId: run.ownerId,
+            runId,
+            metadata: run.metadata,
+            mailbox: resource.mailbox,
+            ownerRef: resource.ownerRef,
+            completion: resource.completion,
+            exit,
+          });
         }),
       );
 
@@ -274,7 +349,30 @@ export namespace WorkflowRunCoordinator {
                 executionId: yield* options.workflow.executionId(payload),
                 interrupt,
               };
+              const resource = {
+                mailbox: yield* Scope.provide(RcMap.get(eventChannels, runId), coordinatorScope),
+                ownerRef: yield* Scope.provide(RcMap.get(ownerChanges, ownerId), coordinatorScope),
+                completion: yield* Ref.make<"Open" | "Completing" | "Done">("Open"),
+              };
+              resources.set(runId, resource);
               yield* storeRun(runId, activeRun);
+              yield* Scope.addFinalizer(
+                coordinatorScope,
+                Effect.gen(function*() {
+                  yield* Deferred.succeed(interrupt, undefined);
+                  const interruptExit = yield* Effect.exit(Effect.interrupt);
+                  yield* completeRun({
+                    payload,
+                    ownerId,
+                    runId,
+                    metadata: activeRun.metadata,
+                    mailbox: resource.mailbox,
+                    ownerRef: resource.ownerRef,
+                    completion: resource.completion,
+                    exit: interruptExit as Exit.Exit<Success["Type"], Error["Type"]>,
+                  });
+                }),
+              );
 
               const launchExit = yield* Effect.exit(
                 options.workflow

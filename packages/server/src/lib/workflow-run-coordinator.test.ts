@@ -378,4 +378,33 @@ describe("WorkflowRunCoordinator.make", () => {
       }).pipe(Effect.provide(WorkflowEngine.layerMemory)),
     { timeout: 5000 },
   );
+
+  it.live(
+    "duplicate completed run ids do not leave another owner locked",
+    () =>
+      Effect.gen(function*() {
+        const gate = yield* Deferred.make<void>();
+        const runs = yield* makeCoordinator({ gate });
+
+        yield* runs.start({ ownerId: "owner-1", runId: "run-1", mode: "success" });
+        yield* Effect.sleep("50 millis");
+
+        yield* runs.start({ ownerId: "owner-2", runId: "run-1", mode: "success" }).pipe(
+          Effect.exit,
+        );
+        yield* Effect.sleep("50 millis");
+
+        const stale = yield* runs.resolve("run-1").pipe(Effect.exit);
+        expect(stale._tag).toBe("Failure");
+        if (stale._tag === "Failure") {
+          expect(stale.cause.reasons.some((reason) =>
+            reason._tag === "Fail" && reason.error._tag === "MissingRunError"
+          )).toBe(true);
+        }
+
+        const second = yield* runs.start({ ownerId: "owner-2", runId: "run-2", mode: "success" });
+        expect(second).toEqual({ runId: "run-2" });
+      }).pipe(Effect.provide(WorkflowEngine.layerMemory)),
+    { timeout: 5000 },
+  );
 });

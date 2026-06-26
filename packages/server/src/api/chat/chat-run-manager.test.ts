@@ -6,6 +6,7 @@ import { describe, expect, it } from "@effect/vitest";
 import { withLanguageModel } from "@test/utils/with-language-model.js";
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -164,6 +165,57 @@ describe("ChatRunManager", () => {
       }
     }).pipe(Effect.provide(makeTestLayer(FailingAiModels))), { timeout: 5000 });
 
+  it.live("failed generation releases the active chat lock when finalize fails once", () => {
+    let activeRunId: Chat.RunId | null = null;
+    let clearAttempts = 0;
+    const repo = Layer.mock(ChatRepo)({
+      create: () => Effect.succeed(mockChat()),
+      findById: (chatId) => Effect.succeed(mockChat({ id: chatId, activeRunId })),
+      listByUser: () => Effect.succeed({ items: [], hasMore: false }),
+      delete: () => Effect.void,
+      startRun: ({ runId }) =>
+        Effect.sync(() => {
+          if (activeRunId !== null) {
+            return false;
+          }
+          activeRunId = runId;
+          return true;
+        }),
+      finishRun: () => Effect.die("finishRun should not be called"),
+      clearActiveRun: ({ runId }) =>
+        Effect.sync(() => {
+          clearAttempts++;
+          if (clearAttempts === 1) {
+            throw new Error("transient clear failure");
+          }
+          if (activeRunId === runId) {
+            activeRunId = null;
+          }
+        }),
+    });
+    return Effect.gen(function*() {
+      const mgr = yield* ChatRunManager;
+      const chat = mockChat();
+
+      const { runId } = yield* mgr.startGeneration({
+        chat,
+        message: "Hello",
+      });
+
+      yield* mgr.subscribe(runId, chat.userId).pipe(Stream.runDrain, Effect.exit);
+      yield* Effect.sleep("200 millis");
+
+      expect(activeRunId).toBeNull();
+      expect(clearAttempts).toBeGreaterThan(1);
+
+      const second = yield* mgr.startGeneration({
+        chat,
+        message: "Again",
+      });
+      expect(second.runId).toBeDefined();
+    }).pipe(Effect.provide(makeTestLayer(FailingAiModels, repo)));
+  }, { timeout: 5000 });
+
   it.live("interrupt fails active stream with interrupt-only cause", () => {
     const slowAi = Layer.mock(AiModels)({
       use: (_model) => (effect) =>
@@ -254,6 +306,84 @@ describe("ChatRunManager", () => {
         ).toBe(true);
       }
     }).pipe(Effect.provide(makeTestLayer(slowAi)));
+  }, { timeout: 5000 });
+
+  it.live("interrupted stream does not end before storage releases active run", () => {
+    const slowAi = Layer.mock(AiModels)({
+      use: (_model) => (effect) =>
+        withLanguageModel(effect, {
+          streamText: () =>
+            Stream.make({ type: "text-delta" as const, id: "t1", delta: "slow" }).pipe(
+              Stream.tap(() => Effect.never),
+            ),
+        }),
+    });
+    return Effect.gen(function*() {
+      const clearStarted = yield* Deferred.make<void>();
+      const clearGate = yield* Deferred.make<void>();
+      let activeRunId: Chat.RunId | null = null;
+      const repo = Layer.mock(ChatRepo)({
+        create: () => Effect.succeed(mockChat()),
+        findById: (chatId) => Effect.succeed(mockChat({ id: chatId, activeRunId })),
+        listByUser: () => Effect.succeed({ items: [], hasMore: false }),
+        delete: () => Effect.void,
+        startRun: ({ runId }) =>
+          Effect.sync(() => {
+            if (activeRunId !== null) {
+              return false;
+            }
+            activeRunId = runId;
+            return true;
+          }),
+        finishRun: ({ runId }) =>
+          Effect.sync(() => {
+            if (activeRunId === runId) {
+              activeRunId = null;
+            }
+          }),
+        clearActiveRun: ({ runId }) =>
+          Effect.gen(function*() {
+            yield* Deferred.succeed(clearStarted, undefined);
+            yield* Deferred.await(clearGate);
+            if (activeRunId === runId) {
+              activeRunId = null;
+            }
+          }),
+      });
+
+      yield* Effect.gen(function*() {
+        const mgr = yield* ChatRunManager;
+        const chat = mockChat();
+
+        const { runId } = yield* mgr.startGeneration({
+          chat,
+          message: "Hello",
+        });
+        const exitFiber = yield* mgr.subscribe(runId, chat.userId).pipe(
+          Stream.runDrain,
+          Effect.exit,
+          Effect.forkChild,
+        );
+
+        yield* Effect.sleep("100 millis");
+        yield* mgr.interrupt(chat.id);
+
+        yield* Deferred.await(clearStarted);
+        const earlyExit = yield* Fiber.join(exitFiber).pipe(
+          Effect.timeoutOption("50 millis"),
+        );
+        expect(earlyExit._tag).toBe("None");
+        expect(activeRunId).toBe(runId);
+
+        yield* Deferred.succeed(clearGate, undefined);
+        const exit = yield* Fiber.join(exitFiber);
+        expect(exit._tag).toBe("Failure");
+        expect(activeRunId).toBeNull();
+      }).pipe(
+        Effect.provide(makeTestLayer(slowAi, repo)),
+        Effect.ensuring(Deferred.succeed(clearGate, undefined)),
+      );
+    });
   }, { timeout: 5000 });
 
   it.live("completed generation releases the active chat lock", () =>
@@ -369,6 +499,65 @@ describe("ChatRunManager", () => {
       });
       yield* Effect.sleep("100 millis");
 
+      yield* Scope.close(scope, Exit.void);
+      yield* Effect.sleep("100 millis");
+
+      expect(activeRunId).toBeNull();
+    });
+  }, { timeout: 5000 });
+
+  it.live("closing manager scope immediately after start clears the active run in storage", () => {
+    let activeRunId: Chat.RunId | null = null;
+    const slowAi = Layer.mock(AiModels)({
+      use: (_model) => (effect) =>
+        withLanguageModel(effect, {
+          streamText: () =>
+            Stream.make({ type: "text-delta" as const, id: "t1", delta: "slow" }).pipe(
+              Stream.tap(() => Effect.never),
+            ),
+        }),
+    });
+    const repo = Layer.mock(ChatRepo)({
+      create: () => Effect.succeed(mockChat()),
+      findById: (chatId) => Effect.succeed(mockChat({ id: chatId, activeRunId })),
+      listByUser: () => Effect.succeed({ items: [], hasMore: false }),
+      delete: () => Effect.void,
+      startRun: ({ runId }) =>
+        Effect.sync(() => {
+          if (activeRunId !== null) {
+            return false;
+          }
+          activeRunId = runId;
+          return true;
+        }),
+      finishRun: ({ runId }) =>
+        Effect.sync(() => {
+          if (activeRunId === runId) {
+            activeRunId = null;
+          }
+        }),
+      clearActiveRun: ({ runId }) =>
+        Effect.sync(() => {
+          if (activeRunId === runId) {
+            activeRunId = null;
+          }
+        }),
+    });
+    return Effect.gen(function*() {
+      const scope = yield* Scope.make();
+      const mgr = yield* ChatRunManager.make.pipe(
+        Effect.provide(slowAi),
+        Effect.provide(repo),
+        Effect.provide(ChatProcessor.layer),
+        Effect.provide(WorkflowEngine.layerMemory),
+        Scope.provide(scope),
+      );
+      const chat = mockChat();
+
+      yield* mgr.startGeneration({
+        chat,
+        message: "Hello",
+      });
       yield* Scope.close(scope, Exit.void);
       yield* Effect.sleep("100 millis");
 
