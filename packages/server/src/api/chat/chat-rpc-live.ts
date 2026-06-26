@@ -27,10 +27,12 @@ export const ChatRpcHandler = Chat.ChatRpc.toLayer(
           Effect.gen(function*() {
             const currentUser = yield* CurrentUser;
             const chat = yield* chatRepo.findById(payload.chatId, currentUser.id);
-            return Stream.fromIterable<Chat.ChatWatchEvent>([{
-              _tag: "RunChanged",
-              runId: chat.activeRunId,
-            }]).pipe(Stream.concat(runManager.watch(payload.chatId)));
+            return Stream.make(
+              {
+                _tag: "RunChanged",
+                runId: chat.activeRunId,
+              } satisfies Chat.ChatWatchEvent,
+            ).pipe(Stream.concat(runManager.watch(payload.chatId)));
           }),
         ),
 
