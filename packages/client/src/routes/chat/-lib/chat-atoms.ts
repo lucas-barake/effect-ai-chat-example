@@ -53,7 +53,7 @@ export const selectedModelAtom = Atom.kvs({
   defaultValue: () => "sonnet-4.6" as const,
 });
 
-export const convertPersistedMessages = (
+const convertPersistedMessages = (
   messages: ReadonlyArray<Message>,
 ): readonly UIMessage[] => {
   const result: UIMessage[] = [];
