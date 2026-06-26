@@ -9,8 +9,8 @@ import type * as Take from "effect/Take";
 import { LanguageModel } from "effect/unstable/ai";
 import { HandlersLive } from "./chat-toolkit-live.js";
 import { ChatMailbox, ChatToolkit } from "./chat-toolkit.js";
-import { JokeApi } from "./joke-api.js";
-import { WeatherApi } from "./weather-api.js";
+import { JokeApi, JokeApiError } from "./joke-api.js";
+import { WeatherApi, WeatherApiError } from "./weather-api.js";
 
 const makeMailbox = Effect.gen(function*() {
   const mailbox = yield* PubSub.unbounded<
@@ -103,7 +103,8 @@ describe("chat toolkit handlers", () => {
       const { mailbox, events } = yield* makeMailbox;
 
       const FailingWeatherApi = Layer.mock(WeatherApi)({
-        getForecast: () => Effect.fail("Weather API error: 500"),
+        getForecast: () =>
+          Effect.fail(new WeatherApiError({ reason: "RequestFailed", message: "500" })),
       });
       const FailHandlers = HandlersLive.pipe(
         Layer.provide(FailingWeatherApi),
@@ -169,7 +170,8 @@ describe("chat toolkit handlers", () => {
       const { mailbox, events } = yield* makeMailbox;
 
       const FailingJokeApi = Layer.mock(JokeApi)({
-        fetchRandom: () => Effect.fail("Joke API error: 500"),
+        fetchRandom: () =>
+          Effect.fail(new JokeApiError({ reason: "RequestFailed", message: "500" })),
       });
       const FailHandlers = HandlersLive.pipe(
         Layer.provide(MockWeatherApi),

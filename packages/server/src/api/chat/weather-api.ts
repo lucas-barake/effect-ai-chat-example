@@ -15,6 +15,14 @@ const WeatherResponse = Schema.Struct({
   }),
 });
 
+export class WeatherApiError extends Schema.TaggedErrorClass<WeatherApiError>()(
+  "WeatherApiError",
+  {
+    reason: Schema.Literals(["RequestFailed", "InvalidResponse"]),
+    message: Schema.String,
+  },
+) {}
+
 export class WeatherApi extends Context.Service<WeatherApi>()("@app/chat/WeatherApi", {
   make: Effect.gen(function*() {
     const httpClient = (yield* HttpClient.HttpClient).pipe(
@@ -35,8 +43,12 @@ export class WeatherApi extends Context.Service<WeatherApi>()("@app/chat/Weather
         }).pipe(
           Effect.flatMap(HttpClientResponse.schemaBodyJson(WeatherResponse)),
           Effect.catchTags({
-            HttpClientError: (e) => Effect.fail(`Weather API error: ${e.message}`),
-            SchemaError: (e) => Effect.fail(`Weather parse error: ${e.message}`),
+            HttpClientError: (error) =>
+              Effect.fail(new WeatherApiError({ reason: "RequestFailed", message: error.message })),
+            SchemaError: (error) =>
+              Effect.fail(
+                new WeatherApiError({ reason: "InvalidResponse", message: error.message }),
+              ),
           }),
           Effect.map(
             (data) =>

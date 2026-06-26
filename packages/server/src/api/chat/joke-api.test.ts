@@ -5,7 +5,7 @@ import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientError from "effect/unstable/http/HttpClientError";
 import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
-import { JokeApi } from "./joke-api.js";
+import { JokeApi, JokeApiError } from "./joke-api.js";
 
 const makeHttpClient = (
   handler: (
@@ -48,7 +48,7 @@ describe("JokeApi", () => {
     }).pipe(Effect.provide(makeTestJokeApi(client)));
   });
 
-  it.effect("fetchRandom HttpClientError fails with Joke API error prefix", () => {
+  it.effect("fetchRandom HttpClientError fails with JokeApiError", () => {
     const client = makeHttpClient((request) => {
       const badResponse = HttpClientResponse.fromWeb(request, new Response(null, { status: 400 }));
       return Effect.fail(
@@ -65,11 +65,13 @@ describe("JokeApi", () => {
     return Effect.gen(function*() {
       const api = yield* JokeApi;
       const result = yield* api.fetchRandom().pipe(Effect.flip);
-      expect(result).toMatch(/^Joke API error:/);
+      expect(result).toBeInstanceOf(JokeApiError);
+      expect(result._tag).toBe("JokeApiError");
+      expect(result.reason).toBe("RequestFailed");
     }).pipe(Effect.provide(makeTestJokeApi(client)));
   });
 
-  it.effect("fetchRandom SchemaError fails with Joke parse error prefix", () => {
+  it.effect("fetchRandom SchemaError fails with JokeApiError", () => {
     const client = makeHttpClient((request) =>
       Effect.succeed(
         HttpClientResponse.fromWeb(
@@ -85,7 +87,9 @@ describe("JokeApi", () => {
     return Effect.gen(function*() {
       const api = yield* JokeApi;
       const result = yield* api.fetchRandom().pipe(Effect.flip);
-      expect(result).toMatch(/^Joke parse error:/);
+      expect(result).toBeInstanceOf(JokeApiError);
+      expect(result._tag).toBe("JokeApiError");
+      expect(result.reason).toBe("InvalidResponse");
     }).pipe(Effect.provide(makeTestJokeApi(client)));
   });
 });

@@ -5,6 +5,7 @@ import { addEqualityTesters, describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as KeyValueStore from "effect/unstable/persistence/KeyValueStore";
 import * as Atom from "effect/unstable/reactivity/Atom";
@@ -30,6 +31,10 @@ const OTHER_CHAT_ID = ChatId.make("a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a13");
 const TEST_RUN_ID = RunId.make("a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a12");
 const OTHER_RUN_ID = RunId.make("a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a14");
 const SELECTED_MODEL_KEY = "@app/chat/selected-model";
+
+class TestError extends Schema.TaggedErrorClass<TestError>()("TestError", {
+  message: Schema.String,
+}) {}
 
 const makeChat = ({
   chatId = TEST_CHAT_ID,
@@ -111,7 +116,7 @@ const makePreferencesLayer = (options?: {
     KeyValueStore.makeStringOnly({
       get: (key) =>
         options?.failGet
-          ? Effect.fail("get-failed" as never) as never
+          ? Effect.fail(new TestError({ message: "get-failed" })) as never
           : Effect.succeed(storage.get(key)),
       set: (key, value) =>
         Effect.sync(() => {
@@ -260,7 +265,7 @@ describe("chat atoms", () => {
 
   it("stores error on stream failure", async () => {
     const { registry } = makeRegistry({
-      chatEvents: () => Stream.fail("stream-error"),
+      chatEvents: () => Stream.fail(new TestError({ message: "stream-error" })),
     });
 
     const sendAtom = sendMessageFamily(TEST_CHAT_ID);

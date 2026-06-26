@@ -11,6 +11,14 @@ const JokeResponse = Schema.Struct({
   joke: Schema.String,
 });
 
+export class JokeApiError extends Schema.TaggedErrorClass<JokeApiError>()(
+  "JokeApiError",
+  {
+    reason: Schema.Literals(["RequestFailed", "InvalidResponse"]),
+    message: Schema.String,
+  },
+) {}
+
 export class JokeApi extends Context.Service<JokeApi>()("@app/chat/JokeApi", {
   make: Effect.gen(function*() {
     const httpClient = (yield* HttpClient.HttpClient).pipe(
@@ -23,8 +31,10 @@ export class JokeApi extends Context.Service<JokeApi>()("@app/chat/JokeApi", {
         httpClient.get("https://icanhazdadjoke.com/").pipe(
           Effect.flatMap(HttpClientResponse.schemaBodyJson(JokeResponse)),
           Effect.catchTags({
-            HttpClientError: (e) => Effect.fail(`Joke API error: ${e.message}`),
-            SchemaError: (e) => Effect.fail(`Joke parse error: ${e.message}`),
+            HttpClientError: (error) =>
+              Effect.fail(new JokeApiError({ reason: "RequestFailed", message: error.message })),
+            SchemaError: (error) =>
+              Effect.fail(new JokeApiError({ reason: "InvalidResponse", message: error.message })),
           }),
           Effect.map((data) => data.joke),
         ),

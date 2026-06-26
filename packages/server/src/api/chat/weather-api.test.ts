@@ -5,7 +5,7 @@ import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientError from "effect/unstable/http/HttpClientError";
 import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
-import { WeatherApi } from "./weather-api.js";
+import { WeatherApi, WeatherApiError } from "./weather-api.js";
 
 const makeHttpClient = (
   handler: (
@@ -48,7 +48,7 @@ describe("WeatherApi", () => {
     }).pipe(Effect.provide(makeTestWeatherApi(client)));
   });
 
-  it.effect("getForecast HttpClientError fails with Weather API error prefix", () => {
+  it.effect("getForecast HttpClientError fails with WeatherApiError", () => {
     const client = makeHttpClient((request) => {
       const badResponse = HttpClientResponse.fromWeb(request, new Response(null, { status: 400 }));
       return Effect.fail(
@@ -67,11 +67,13 @@ describe("WeatherApi", () => {
       const result = yield* api.getForecast({ latitude: 40.7, longitude: -74.0 }).pipe(
         Effect.flip,
       );
-      expect(result).toMatch(/^Weather API error:/);
+      expect(result).toBeInstanceOf(WeatherApiError);
+      expect(result._tag).toBe("WeatherApiError");
+      expect(result.reason).toBe("RequestFailed");
     }).pipe(Effect.provide(makeTestWeatherApi(client)));
   });
 
-  it.effect("getForecast SchemaError fails with Weather parse error prefix", () => {
+  it.effect("getForecast SchemaError fails with WeatherApiError", () => {
     const client = makeHttpClient((request) =>
       Effect.succeed(
         HttpClientResponse.fromWeb(
@@ -89,7 +91,9 @@ describe("WeatherApi", () => {
       const result = yield* api.getForecast({ latitude: 40.7, longitude: -74.0 }).pipe(
         Effect.flip,
       );
-      expect(result).toMatch(/^Weather parse error:/);
+      expect(result).toBeInstanceOf(WeatherApiError);
+      expect(result._tag).toBe("WeatherApiError");
+      expect(result.reason).toBe("InvalidResponse");
     }).pipe(Effect.provide(makeTestWeatherApi(client)));
   });
 });

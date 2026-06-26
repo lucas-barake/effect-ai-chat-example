@@ -5,6 +5,8 @@ import * as Schema from "effect/Schema";
 import type * as Take from "effect/Take";
 import * as Tool from "effect/unstable/ai/Tool";
 import * as Toolkit from "effect/unstable/ai/Toolkit";
+import { JokeApiError } from "./joke-api.js";
+import { WeatherApiError } from "./weather-api.js";
 
 export class ChatMailbox extends Context.Service<
   ChatMailbox,
@@ -21,9 +23,12 @@ const getCurrentDateTime = Tool.make("getCurrentDateTime", {
 const getWeather = Tool.make("getWeather", {
   description: "Get current weather for a location",
   failureMode: "return",
-  parameters: Schema.Struct({ latitude: Schema.Number, longitude: Schema.Number }),
+  parameters: Schema.Struct({
+    latitude: Schema.Number,
+    longitude: Schema.Number,
+  }),
   success: Schema.String,
-  failure: Schema.String,
+  failure: WeatherApiError,
   dependencies: [ChatMailbox],
 });
 
@@ -32,8 +37,12 @@ const fetchRandomJoke = Tool.make("fetchRandomJoke", {
   failureMode: "return",
   parameters: Schema.Struct({}),
   success: Schema.String,
-  failure: Schema.String,
+  failure: JokeApiError,
   dependencies: [ChatMailbox],
 });
 
-export const ChatToolkit = Toolkit.make(getCurrentDateTime, getWeather, fetchRandomJoke);
+export const ChatToolkit = Toolkit.make(
+  getCurrentDateTime,
+  getWeather,
+  fetchRandomJoke,
+);
