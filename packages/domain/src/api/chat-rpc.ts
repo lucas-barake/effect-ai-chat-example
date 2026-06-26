@@ -40,13 +40,6 @@ export type ChatWatchEvent = typeof ChatWatchEvent.Type;
 export const ToolName = Schema.Literals(["getCurrentDateTime", "getWeather", "fetchRandomJoke"]);
 export type ToolName = typeof ToolName.Type;
 
-export const ToolEvent = Schema.Union([
-  Schema.TaggedStruct("ToolStart", { toolName: ToolName, input: Schema.String }),
-  Schema.TaggedStruct("ToolFailure", { toolName: ToolName }),
-  Schema.TaggedStruct("ToolSuccess", { toolName: ToolName, output: Schema.String }),
-]);
-export type ToolEvent = typeof ToolEvent.Type;
-
 const TextPart = Schema.Struct({ type: Schema.Literal("text"), text: Schema.String });
 const ToolCallPart = Schema.Struct({
   type: Schema.Literal("tool-call"),
@@ -94,16 +87,6 @@ export const ChatEvent = Schema.Union([
   Schema.TaggedStruct("ToolSuccess", { toolName: ToolName, output: Schema.String }),
 ]);
 export type ChatEvent = typeof ChatEvent.Type;
-
-const MessageEvent = Schema.Union([
-  Schema.TaggedStruct("Chunk", { delta: Schema.String }),
-  Schema.TaggedStruct("ReasoningChunk", { delta: Schema.String }),
-  Schema.TaggedStruct("ToolStart", { toolName: ToolName, input: Schema.String }),
-  Schema.TaggedStruct("ToolFailure", { toolName: ToolName }),
-  Schema.TaggedStruct("ToolSuccess", { toolName: ToolName, output: Schema.String }),
-  Schema.TaggedStruct("Error", { message: Schema.String }),
-]);
-export type MessageEvent = typeof MessageEvent.Type;
 
 export class ChatAskRpc extends Rpc.make("chat_ask", {
   payload: {
