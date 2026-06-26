@@ -3,7 +3,8 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "bun --watch src/server.ts"
+    "dev": "bun --watch src/server.ts",
+    "migrate": "bun src/db/migrate.ts"
   },
   "dependencies": {
     "@app/domain": "workspace:^",
