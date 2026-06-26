@@ -88,7 +88,7 @@ export const ChatEvent = Schema.Union([
 ]);
 export type ChatEvent = typeof ChatEvent.Type;
 
-export class ChatAskRpc extends Rpc.make("chat_ask", {
+class ChatAskRpc extends Rpc.make("chat_ask", {
   payload: {
     chatId: ChatId,
     message: Schema.String,
@@ -97,21 +97,21 @@ export class ChatAskRpc extends Rpc.make("chat_ask", {
   error: Schema.Union([ChatNotFoundError, GenerationInProgressError]),
 }) {}
 
-export class ChatEventsRpc extends Rpc.make("chat_events", {
+class ChatEventsRpc extends Rpc.make("chat_events", {
   stream: true,
   payload: { runId: RunId },
   success: ChatEvent,
   error: ChatRunNotFoundError,
 }) {}
 
-export class ChatWatchRpc extends Rpc.make("chat_watch", {
+class ChatWatchRpc extends Rpc.make("chat_watch", {
   stream: true,
   payload: { chatId: ChatId },
   success: ChatWatchEvent,
   error: ChatNotFoundError,
 }) {}
 
-export class ChatCreateRpc extends Rpc.make("chat_create", {
+class ChatCreateRpc extends Rpc.make("chat_create", {
   payload: {
     title: Schema.NonEmptyString,
     model: ModelFamily,
@@ -119,7 +119,7 @@ export class ChatCreateRpc extends Rpc.make("chat_create", {
   success: Chat,
 }) {}
 
-export class ChatListRpc extends Rpc.make("chat_list", {
+class ChatListRpc extends Rpc.make("chat_list", {
   payload: {
     cursor: Schema.NullOr(Schema.DateTimeUtcFromString),
   },
@@ -129,19 +129,19 @@ export class ChatListRpc extends Rpc.make("chat_list", {
   }),
 }) {}
 
-export class ChatGetRpc extends Rpc.make("chat_get", {
+class ChatGetRpc extends Rpc.make("chat_get", {
   payload: { chatId: ChatId },
   success: Chat.WithMessages,
   error: ChatNotFoundError,
 }) {}
 
-export class ChatDeleteRpc extends Rpc.make("chat_delete", {
+class ChatDeleteRpc extends Rpc.make("chat_delete", {
   payload: { chatId: ChatId },
   success: Schema.Void,
   error: ChatNotFoundError,
 }) {}
 
-export class ChatInterruptRpc extends Rpc.make("chat_interrupt", {
+class ChatInterruptRpc extends Rpc.make("chat_interrupt", {
   payload: { chatId: ChatId },
   success: Schema.Void,
   error: ChatNotFoundError,
