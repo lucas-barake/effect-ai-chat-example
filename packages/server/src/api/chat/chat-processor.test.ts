@@ -78,10 +78,11 @@ describe("makePrompt", () => {
     expect(result[1]).toEqual({ role: "assistant", content: [{ type: "text", text: "reply" }] });
   });
 
-  it("assistant array with text and tool-call parts forwarded", () => {
+  it("assistant array with reasoning, text, and tool-call parts forwarded", () => {
     const result = makePrompt([{
       role: "assistant",
       content: [
+        { type: "reasoning", text: "Thinking" },
         { type: "text", text: "Using tool" },
         { type: "tool-call", id: "c1", name: "getCurrentDateTime", params: {} },
       ],
@@ -90,6 +91,7 @@ describe("makePrompt", () => {
     expect(result[1]).toEqual({
       role: "assistant",
       content: [
+        { type: "reasoning", text: "Thinking" },
         { type: "text", text: "Using tool" },
         { type: "tool-call", id: "c1", name: "getCurrentDateTime", params: {} },
       ],
@@ -145,7 +147,7 @@ describe("ChatProcessor", () => {
       const { mailbox, events } = yield* makeMailbox;
       const processor = yield* ChatProcessor;
 
-      yield* processor.run(mockChat(), "Think carefully").pipe(
+      const result = yield* processor.run(mockChat(), "Think carefully").pipe(
         withLanguageModel({
           streamText: [{ type: "reasoning-delta", id: "r1", delta: "Thinking..." }],
         }),
@@ -156,6 +158,36 @@ describe("ChatProcessor", () => {
       const evts = yield* events(1);
       expect(evts).toHaveLength(1);
       expect(evts[0]).toEqual({ _tag: "ReasoningChunk", delta: "Thinking..." });
+      expect(result).toEqual([{
+        role: "assistant",
+        content: [{ type: "reasoning", text: "Thinking..." }],
+      }]);
+    }).pipe(Effect.provide(ChatProcessor.layer)));
+
+  it.effect("reasoning and text response is returned as assistant message parts", () =>
+    Effect.gen(function*() {
+      const { mailbox } = yield* makeMailbox;
+      const processor = yield* ChatProcessor;
+
+      const result = yield* processor.run(mockChat(), "Think then answer").pipe(
+        withLanguageModel({
+          streamText: [
+            { type: "reasoning-delta", id: "r1", delta: "Thinking" },
+            { type: "reasoning-delta", id: "r1", delta: "..." },
+            { type: "text-delta", id: "t1", delta: "Answer" },
+          ],
+        }),
+        Effect.provideService(ChatMailbox, mailbox),
+        Effect.provide(TestHandlers),
+      );
+
+      expect(result).toEqual([{
+        role: "assistant",
+        content: [
+          { type: "reasoning", text: "Thinking..." },
+          { type: "text", text: "Answer" },
+        ],
+      }]);
     }).pipe(Effect.provide(ChatProcessor.layer)));
 
   it.effect("loop continues on tool-calls finish reason and stops on stop", () =>

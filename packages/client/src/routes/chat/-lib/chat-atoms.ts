@@ -115,6 +115,16 @@ const convertPersistedMessages = (
               } else if (part.text) {
                 contentBlocks.push({ _tag: "text", content: part.text });
               }
+            } else if (part.type === "reasoning") {
+              const last = contentBlocks[contentBlocks.length - 1];
+              if (last && last._tag === "reasoning") {
+                contentBlocks[contentBlocks.length - 1] = {
+                  _tag: "reasoning",
+                  content: last.content + part.text,
+                };
+              } else if (part.text) {
+                contentBlocks.push({ _tag: "reasoning", content: part.text });
+              }
             } else if (part.type === "tool-call") {
               const toolResult = toolResults.get(part.id);
               const tool: ToolStatus = {

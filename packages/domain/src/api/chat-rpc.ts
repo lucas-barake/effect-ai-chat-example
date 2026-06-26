@@ -41,6 +41,7 @@ export const ToolName = Schema.Literals(["getCurrentDateTime", "getWeather", "fe
 export type ToolName = typeof ToolName.Type;
 
 const TextPart = Schema.Struct({ type: Schema.Literal("text"), text: Schema.String });
+const ReasoningPart = Schema.Struct({ type: Schema.Literal("reasoning"), text: Schema.String });
 const ToolCallPart = Schema.Struct({
   type: Schema.Literal("tool-call"),
   id: Schema.String,
@@ -54,7 +55,7 @@ const ToolResultPart = Schema.Struct({
   result: Schema.Json,
   isFailure: Schema.Boolean,
 });
-export const MessagePart = Schema.Union([TextPart, ToolCallPart, ToolResultPart]);
+export const MessagePart = Schema.Union([TextPart, ReasoningPart, ToolCallPart, ToolResultPart]);
 export type MessagePart = typeof MessagePart.Type;
 const MessageContent = Schema.Union([Schema.String, Schema.Array(MessagePart)]);
 

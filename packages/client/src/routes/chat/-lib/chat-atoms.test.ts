@@ -244,6 +244,36 @@ describe("chat atoms", () => {
     expect(registry.get(messagesFamily(TEST_CHAT_ID)).at(-1)?.content).toBe("hi");
   });
 
+  it("loads persisted reasoning blocks", async () => {
+    const { registry } = makeRegistry({
+      chatGet: (chatId) =>
+        Effect.succeed(makeChat({
+          chatId,
+          messages: [
+            { role: "user", content: "test" },
+            {
+              role: "assistant",
+              content: [
+                { type: "reasoning", text: "Thinking" },
+                { type: "reasoning", text: "..." },
+                { type: "text", text: "answer" },
+              ],
+            },
+          ],
+        })),
+    });
+
+    registry.mount(messagesFamily(TEST_CHAT_ID));
+    await flush();
+
+    const assistant = registry.get(messagesFamily(TEST_CHAT_ID)).at(-1);
+    expect(assistant?.content).toBe("answer");
+    expect(assistant?.contentBlocks).toEqual([
+      { _tag: "reasoning", content: "Thinking..." },
+      { _tag: "text", content: "answer" },
+    ]);
+  });
+
   it("marks interrupted through interruptFamily", async () => {
     const { registry } = makeRegistry({
       chatEvents: () => Stream.never,
