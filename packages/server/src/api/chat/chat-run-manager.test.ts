@@ -10,7 +10,6 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
-import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as AiError from "effect/unstable/ai/AiError";
@@ -48,16 +47,12 @@ const FailingAiModels = Layer.mock(AiModels)({
     ) as any,
 });
 
-const makeMockChatRepo = (updatedMessagesRef?: Ref.Ref<ReadonlyArray<typeof Chat.Message.Type>>) =>
+const makeMockChatRepo = () =>
   Layer.mock(ChatRepo)({
     create: () => Effect.succeed(mockChat()),
     findById: (chatId) => Effect.succeed(mockChat({ id: chatId })),
     listByUser: () => Effect.succeed({ items: [], hasMore: false }),
     delete: () => Effect.void,
-    updateMessages: ({ messages }) =>
-      updatedMessagesRef
-        ? Ref.set(updatedMessagesRef, messages)
-        : Effect.void,
     startRun: () => Effect.succeed(true),
     finishRun: () => Effect.void,
     clearActiveRun: () => Effect.void,

@@ -29,11 +29,6 @@ export class ChatRepo extends Context.Service<ChatRepo, {
     chatId: Chat.ChatId,
     userId: string,
   ) => Effect.Effect<void, Chat.ChatNotFoundError>;
-  readonly updateMessages: (args: {
-    readonly chatId: Chat.ChatId;
-    readonly userId: string;
-    readonly messages: ReadonlyArray<typeof Chat.Message.Type>;
-  }) => Effect.Effect<void>;
   readonly startRun: (args: {
     readonly chatId: Chat.ChatId;
     readonly userId: string;
@@ -97,20 +92,6 @@ export class ChatRepo extends Context.Service<ChatRepo, {
         DELETE FROM chats
         WHERE id = ${chatId} AND user_id = ${userId}
         RETURNING id
-      `,
-    });
-
-    const updateMessagesQuery = SqlSchema.void({
-      Request: Schema.Struct({
-        chatId: Chat.ChatId,
-        userId: Schema.String,
-        messages: Schema.fromJsonString(Schema.Array(Chat.Message)),
-      }),
-      execute: ({ chatId, userId, messages }) =>
-        sql`
-        UPDATE chats
-        SET messages = ${messages}, updated_at = NOW()
-        WHERE id = ${chatId} AND user_id = ${userId}
       `,
     });
 
@@ -217,14 +198,6 @@ export class ChatRepo extends Context.Service<ChatRepo, {
               onSome: () => Effect.void,
             }),
           ),
-        ),
-
-      updateMessages: ({ chatId, userId, messages }) =>
-        updateMessagesQuery({ chatId, userId, messages }).pipe(
-          Effect.catchTags({
-            SchemaError: Effect.die,
-            SqlError: Effect.die,
-          }),
         ),
 
       startRun: ({ chatId, userId, runId, messages }) =>

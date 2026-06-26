@@ -23,7 +23,7 @@ export const PgTest = Layer.unwrap(
   ),
 ).pipe(Layer.orDie);
 
-export class TransactionRollback extends Schema.TaggedErrorClass<TransactionRollback>()(
+class TransactionRollback extends Schema.TaggedErrorClass<TransactionRollback>()(
   "TestRollback",
   { value: Schema.Any },
 ) {}
