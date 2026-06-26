@@ -39,6 +39,7 @@ const makeCoordinator = (options: {
   readonly prepareStarted?: Deferred.Deferred<void>;
   readonly finalizeGate?: Deferred.Deferred<void>;
   readonly finalizeStarted?: Deferred.Deferred<void>;
+  readonly runStarted?: Deferred.Deferred<void>;
 }) =>
   WorkflowRunCoordinator.make<
     string,
@@ -72,6 +73,10 @@ const makeCoordinator = (options: {
         })
         : Effect.succeed({ ownerId: payload.ownerId }),
     run: Effect.fnUntraced(function*({ payload, mailbox }) {
+      if (options.runStarted) {
+        yield* Deferred.succeed(options.runStarted, undefined);
+      }
+
       if (payload.mode === "prepare-wait") {
         yield* Deferred.await(options.gate);
         return;
@@ -257,6 +262,119 @@ describe("WorkflowRunCoordinator.make", () => {
 
         const second = yield* runs.start({ ownerId: "owner-1", runId: "run-2", mode: "success" });
         expect(second).toEqual({ runId: "run-2" });
+      }).pipe(Effect.provide(WorkflowEngine.layerMemory)),
+    { timeout: 5000 },
+  );
+
+  it.live(
+    "resolved event stream remains usable after the run completes",
+    () =>
+      Effect.gen(function*() {
+        const gate = yield* Deferred.make<void>();
+        const runs = yield* makeCoordinator({ gate });
+
+        const { runId } = yield* runs.start({ ownerId: "owner-1", runId: "run-1", mode: "wait" });
+        const run = yield* runs.resolve(runId);
+
+        yield* Deferred.succeed(gate, undefined);
+        yield* Effect.sleep("50 millis");
+
+        const events = yield* run.events.pipe(
+          Stream.runCollect,
+          Effect.timeoutOption("200 millis"),
+        );
+        expect(events._tag).toBe("Some");
+        if (events._tag === "Some") {
+          expect(events.value).toEqual([{ _tag: "Value", value: "run-1" }]);
+        }
+      }).pipe(Effect.provide(WorkflowEngine.layerMemory)),
+    { timeout: 5000 },
+  );
+
+  it.live(
+    "caller cancellation during prepare releases the owner lock",
+    () =>
+      Effect.gen(function*() {
+        const gate = yield* Deferred.make<void>();
+        const prepareGate = yield* Deferred.make<void>();
+        const prepareStarted = yield* Deferred.make<void>();
+        const runs = yield* makeCoordinator({ gate, prepareGate, prepareStarted });
+
+        yield* Effect.gen(function*() {
+          const startFiber = yield* runs.start({
+            ownerId: "owner-1",
+            runId: "run-1",
+            mode: "prepare-wait",
+          }).pipe(Effect.forkChild);
+
+          yield* Deferred.await(prepareStarted);
+          yield* Fiber.interrupt(startFiber).pipe(Effect.forkChild);
+          yield* Effect.yieldNow;
+
+          const second = yield* runs.start({ ownerId: "owner-1", runId: "run-2", mode: "success" });
+          expect(second).toEqual({ runId: "run-2" });
+        }).pipe(
+          Effect.ensuring(Deferred.succeed(gate, undefined)),
+          Effect.ensuring(Deferred.succeed(prepareGate, undefined)),
+        );
+      }).pipe(Effect.provide(WorkflowEngine.layerMemory)),
+    { timeout: 5000 },
+  );
+
+  it.live(
+    "interrupt before workflow handler starts does not run user code",
+    () =>
+      Effect.gen(function*() {
+        const gate = yield* Deferred.make<void>();
+        const prepareGate = yield* Deferred.make<void>();
+        const prepareStarted = yield* Deferred.make<void>();
+        const runStarted = yield* Deferred.make<void>();
+        const runs = yield* makeCoordinator({ gate, prepareGate, prepareStarted, runStarted });
+
+        yield* Effect.gen(function*() {
+          const startFiber = yield* runs.start({
+            ownerId: "owner-1",
+            runId: "run-1",
+            mode: "prepare-wait",
+          }).pipe(Effect.forkChild);
+
+          yield* Deferred.await(prepareStarted);
+          yield* runs.interrupt("owner-1");
+          yield* Deferred.succeed(prepareGate, undefined);
+          yield* Fiber.join(startFiber);
+
+          const started = yield* Deferred.await(runStarted).pipe(
+            Effect.timeoutOption("100 millis"),
+          );
+          expect(started._tag).toBe("None");
+        }).pipe(Effect.ensuring(Deferred.succeed(gate, undefined)));
+      }).pipe(Effect.provide(WorkflowEngine.layerMemory)),
+    { timeout: 5000 },
+  );
+
+  it.live(
+    "duplicate run ids do not leave another owner locked",
+    () =>
+      Effect.gen(function*() {
+        const gate = yield* Deferred.make<void>();
+        const runs = yield* makeCoordinator({ gate });
+
+        yield* Effect.gen(function*() {
+          const { runId } = yield* runs.start({ ownerId: "owner-1", runId: "run-1", mode: "wait" });
+          const firstRun = yield* runs.resolve(runId);
+          yield* firstRun.events.pipe(Stream.take(1), Stream.runCollect);
+
+          const duplicate = yield* runs.start({ ownerId: "owner-2", runId, mode: "success" }).pipe(
+            Effect.flip,
+          );
+          expect(duplicate._tag).toBe("BusyError");
+
+          yield* Deferred.succeed(gate, undefined);
+          yield* Effect.sleep("50 millis");
+
+          const second = yield* runs.start({ ownerId: "owner-2", runId: "run-2", mode: "success" });
+          expect(second).toEqual({ runId: "run-2" });
+        }).pipe(Effect.ensuring(Deferred.succeed(gate, undefined)));
       }).pipe(Effect.provide(WorkflowEngine.layerMemory)),
     { timeout: 5000 },
   );

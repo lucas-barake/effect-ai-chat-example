@@ -314,4 +314,65 @@ describe("ChatRunManager", () => {
       expect(finalized).toBe(true);
     });
   }, { timeout: 5000 });
+
+  it.live("closing manager scope clears the active run in storage", () => {
+    let activeRunId: Chat.RunId | null = null;
+    const slowAi = Layer.mock(AiModels)({
+      use: (_model) => (effect) =>
+        withLanguageModel(effect, {
+          streamText: () =>
+            Stream.make({ type: "text-delta" as const, id: "t1", delta: "slow" }).pipe(
+              Stream.tap(() => Effect.never),
+            ),
+        }),
+    });
+    const repo = Layer.mock(ChatRepo)({
+      create: () => Effect.succeed(mockChat()),
+      findById: (chatId) => Effect.succeed(mockChat({ id: chatId, activeRunId })),
+      listByUser: () => Effect.succeed({ items: [], hasMore: false }),
+      delete: () => Effect.void,
+      startRun: ({ runId }) =>
+        Effect.sync(() => {
+          if (activeRunId !== null) {
+            return false;
+          }
+          activeRunId = runId;
+          return true;
+        }),
+      finishRun: ({ runId }) =>
+        Effect.sync(() => {
+          if (activeRunId === runId) {
+            activeRunId = null;
+          }
+        }),
+      clearActiveRun: ({ runId }) =>
+        Effect.sync(() => {
+          if (activeRunId === runId) {
+            activeRunId = null;
+          }
+        }),
+    });
+    return Effect.gen(function*() {
+      const scope = yield* Scope.make();
+      const mgr = yield* ChatRunManager.make.pipe(
+        Effect.provide(slowAi),
+        Effect.provide(repo),
+        Effect.provide(ChatProcessor.layer),
+        Effect.provide(WorkflowEngine.layerMemory),
+        Scope.provide(scope),
+      );
+      const chat = mockChat();
+
+      yield* mgr.startGeneration({
+        chat,
+        message: "Hello",
+      });
+      yield* Effect.sleep("100 millis");
+
+      yield* Scope.close(scope, Exit.void);
+      yield* Effect.sleep("100 millis");
+
+      expect(activeRunId).toBeNull();
+    });
+  }, { timeout: 5000 });
 });
