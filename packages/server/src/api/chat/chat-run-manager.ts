@@ -102,12 +102,11 @@ const makeChatRunManager = Effect.gen(function*() {
     subscribe: (runId: Chat.RunId, userId: string) =>
       Stream.unwrap(
         runs.resolve(runId).pipe(
-          Effect.flatMap((run) => {
-            if (run.metadata.userId !== userId) {
-              return Effect.fail(new Chat.ChatRunNotFoundError({ runId }));
-            }
-            return Effect.succeed(run.events);
-          }),
+          Effect.filterOrFail(
+            (run) => run.metadata.userId === userId,
+            () => new Chat.ChatRunNotFoundError({ runId }),
+          ),
+          Effect.map((run) => run.events),
         ),
       ),
 

@@ -56,7 +56,7 @@ export class ChatRepo extends Context.Service<ChatRepo, {
       execute: (req) => sql`INSERT INTO chats ${sql.insert(req).returning("*")}`,
     });
 
-    const findByIdQuery = SqlSchema.findOneOption({
+    const findByIdQuery = SqlSchema.findOne({
       Request: Schema.Struct({ chatId: Chat.ChatId, userId: Schema.String }),
       Result: ChatModel,
       execute: ({ chatId, userId }) =>
@@ -84,7 +84,7 @@ export class ChatRepo extends Context.Service<ChatRepo, {
       `,
     });
 
-    const deleteQuery = SqlSchema.findOneOption({
+    const deleteQuery = SqlSchema.findOne({
       Request: Schema.Struct({ chatId: Chat.ChatId, userId: Schema.String }),
       Result: Schema.Struct({ id: Chat.ChatId }),
       execute: ({ chatId, userId }) =>
@@ -162,13 +162,8 @@ export class ChatRepo extends Context.Service<ChatRepo, {
           Effect.catchTags({
             SchemaError: Effect.die,
             SqlError: Effect.die,
+            NoSuchElementError: () => new Chat.ChatNotFoundError({ id: chatId }),
           }),
-          Effect.flatMap(
-            Option.match({
-              onNone: () => Effect.fail(new Chat.ChatNotFoundError({ id: chatId })),
-              onSome: Effect.succeed,
-            }),
-          ),
         ),
 
       listByUser: (userId, cursor) =>
@@ -191,13 +186,9 @@ export class ChatRepo extends Context.Service<ChatRepo, {
           Effect.catchTags({
             SchemaError: Effect.die,
             SqlError: Effect.die,
+            NoSuchElementError: () => new Chat.ChatNotFoundError({ id: chatId }),
           }),
-          Effect.flatMap(
-            Option.match({
-              onNone: () => Effect.fail(new Chat.ChatNotFoundError({ id: chatId })),
-              onSome: () => Effect.void,
-            }),
-          ),
+          Effect.asVoid,
         ),
 
       startRun: ({ chatId, userId, runId, messages }) =>

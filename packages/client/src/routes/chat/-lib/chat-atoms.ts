@@ -479,11 +479,13 @@ const prepareSend = Effect.fnUntraced(function*({
     messages: optimistic.messages,
   });
 
-  const askExit = yield* Effect.exit(api.chatAsk({ chatId, message }));
-  if (askExit._tag === "Failure") {
-    get.set(localTranscriptFamily(chatId), localNone);
-    return yield* Effect.failCause(askExit.cause);
-  }
+  const { runId } = yield* api.chatAsk({ chatId, message }).pipe(
+    Effect.tapCause(() =>
+      Effect.sync(() => {
+        get.set(localTranscriptFamily(chatId), localNone);
+      })
+    ),
+  );
 
   const latestLocal = get(localTranscriptFamily(chatId));
   if (latestLocal._tag !== "Sending" || latestLocal.assistantMsgId !== optimistic.assistantMsgId) {
@@ -495,13 +497,13 @@ const prepareSend = Effect.fnUntraced(function*({
 
   get.set(localTranscriptFamily(chatId), {
     _tag: "Streaming",
-    runId: askExit.value.runId,
+    runId,
     assistantMsgId: optimistic.assistantMsgId,
     messages: optimistic.messages,
   });
   get.set(inputFamily(chatId), "");
 
-  return Option.some(askExit.value.runId);
+  return Option.some(runId);
 });
 
 export const sendMessageFamily = Atom.family((chatId: ChatId) =>

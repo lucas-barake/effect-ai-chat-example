@@ -63,8 +63,7 @@ export const ChatRpcHandler = Chat.ChatRpc.toLayer(
 
       chat_list: Effect.fnUntraced(function*(payload) {
         const currentUser = yield* CurrentUser;
-        const cursor = payload.cursor === null ? Option.none() : Option.some(payload.cursor);
-        return yield* chatRepo.listByUser(currentUser.id, cursor);
+        return yield* chatRepo.listByUser(currentUser.id, Option.fromNullOr(payload.cursor));
       }),
 
       chat_get: Effect.fnUntraced(function*(payload) {

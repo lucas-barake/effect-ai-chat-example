@@ -146,10 +146,7 @@ export class ChatProcessor extends Context.Service<ChatProcessor>()(
             newMessages.push({ role: "tool", content: result.toolResults });
           }
 
-          cont = result.finish.pipe(
-            Option.map((f) => f === "tool-calls"),
-            Option.getOrElse(() => false),
-          );
+          cont = result.finish.pipe(Option.exists((f) => f === "tool-calls"));
         }
 
         return newMessages as ReadonlyArray<typeof Chat.Message.Type>;

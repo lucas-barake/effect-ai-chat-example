@@ -146,6 +146,31 @@ describe("ChatRunManager", () => {
       }
     }).pipe(Effect.provide(makeTestLayer())));
 
+  it.live(
+    "subscribe fails with ChatRunNotFoundError when userId does not match",
+    () =>
+      Effect.gen(function*() {
+        const mgr = yield* ChatRunManager;
+        const chat = mockChat();
+
+        const { runId } = yield* mgr.startGeneration({
+          chat,
+          message: "Hello",
+        });
+
+        const exit = yield* mgr.subscribe(runId, "user-2").pipe(Stream.runDrain, Effect.exit);
+        expect(exit._tag).toBe("Failure");
+        if (exit._tag === "Failure") {
+          expect(
+            exit.cause.reasons.some((reason) =>
+              reason._tag === "Fail" && reason.error._tag === "ChatRunNotFoundError"
+            ),
+          ).toBe(true);
+        }
+      }).pipe(Effect.provide(makeTestLayer())),
+    { timeout: 5000 },
+  );
+
   it.live("failed generation fails stream with defect", () =>
     Effect.gen(function*() {
       const mgr = yield* ChatRunManager;

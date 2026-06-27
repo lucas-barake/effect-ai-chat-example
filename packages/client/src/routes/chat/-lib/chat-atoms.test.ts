@@ -324,6 +324,21 @@ describe("chat atoms", () => {
     await flush();
   });
 
+  it("clears optimistic messages when chatAsk fails", async () => {
+    const { calls, registry } = makeRegistry({
+      chatAsk: () => Effect.fail(new TestError({ message: "ask-failed" })),
+    });
+
+    const sendAtom = sendMessageFamily(TEST_CHAT_ID);
+    registry.mount(sendAtom);
+    registry.set(sendAtom, { message: "hello" });
+    await flush();
+
+    expect(calls.chatAsk).toEqual([{ chatId: TEST_CHAT_ID, message: "hello" }]);
+    expect(registry.get(messagesFamily(TEST_CHAT_ID))).toEqual([]);
+    expect(registry.get(generatingFamily(TEST_CHAT_ID))).toBe(false);
+  });
+
   it("keeps chats independent", async () => {
     const { registry } = makeRegistry({
       chatEvents: (runId) => runId === TEST_RUN_ID ? Stream.never : Stream.empty,

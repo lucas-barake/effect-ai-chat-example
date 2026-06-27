@@ -46,9 +46,7 @@ export const HandlersLive = ChatToolkit.toLayer(
 
         const result = yield* weatherApi.getForecast(params).pipe(
           Effect.tapError(() =>
-            PubSub.publish(mailbox, [{ _tag: "ToolFailure", toolName: "getWeather" }]).pipe(
-              Effect.asVoid,
-            )
+            PubSub.publish(mailbox, [{ _tag: "ToolFailure", toolName: "getWeather" }])
           ),
         );
 
@@ -72,9 +70,7 @@ export const HandlersLive = ChatToolkit.toLayer(
 
         const joke = yield* jokeApi.fetchRandom().pipe(
           Effect.tapError(() =>
-            PubSub.publish(mailbox, [{ _tag: "ToolFailure", toolName: "fetchRandomJoke" }]).pipe(
-              Effect.asVoid,
-            )
+            PubSub.publish(mailbox, [{ _tag: "ToolFailure", toolName: "fetchRandomJoke" }])
           ),
         );
 

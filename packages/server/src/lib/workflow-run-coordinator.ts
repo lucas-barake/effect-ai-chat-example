@@ -281,11 +281,7 @@ export namespace WorkflowRunCoordinator {
         options.workflow,
         Effect.fnUntraced(function*(payload) {
           const runId = options.runId(payload);
-          const run = yield* lookupActiveRun(runId).pipe(
-            Effect.catch((error) =>
-              Effect.die(error)
-            ),
-          );
+          const run = yield* lookupActiveRun(runId).pipe(Effect.orDie);
           const resource = Option.getOrUndefined(HashMap.get(resources, runId));
           if (resource === undefined) {
             return yield* Effect.die(options.missingRun(runId));
@@ -333,7 +329,8 @@ export namespace WorkflowRunCoordinator {
           }));
           const exit = Exit.match(runExit, {
             onFailure: Exit.failCause,
-            onSuccess: (exit) => exit,
+            onSuccess: (exit) =>
+              exit,
           });
 
           yield* completeRun({
@@ -365,9 +362,7 @@ export namespace WorkflowRunCoordinator {
               return {
                 ownerId: activeRun.value.ownerId,
                 metadata: activeRun.value.metadata,
-                events: Stream.unwrap(
-                  Effect.succeed(Stream.fromPubSubTake(resource.mailbox)),
-                ),
+                events: Stream.fromPubSubTake(resource.mailbox),
               } as const;
             }
           }
@@ -377,9 +372,7 @@ export namespace WorkflowRunCoordinator {
             return {
               ownerId: completedRun.ownerId,
               metadata: completedRun.metadata,
-              events: Stream.unwrap(
-                Effect.succeed(Stream.fromPubSubTake(completedRun.mailbox)),
-              ),
+              events: Stream.fromPubSubTake(completedRun.mailbox),
             } as const;
           }
 
