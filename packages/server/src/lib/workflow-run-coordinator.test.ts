@@ -1,9 +1,13 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
+import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Equal from "effect/Equal";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
+import * as Hash from "effect/Hash";
+import * as Layer from "effect/Layer";
 import * as PubSub from "effect/PubSub";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
@@ -24,6 +28,18 @@ class RunFailed extends Schema.TaggedErrorClass<RunFailed>()("RunFailed", {
   message: Schema.String,
 }) {}
 
+class RunKey implements Equal.Equal {
+  constructor(readonly value: string) {}
+
+  [Equal.symbol](that: Equal.Equal): boolean {
+    return that instanceof RunKey && that.value === this.value;
+  }
+
+  [Hash.symbol](): number {
+    return Hash.string(this.value);
+  }
+}
+
 const TestWorkflow = Workflow.make("test/WorkflowRunCoordinator", {
   payload: {
     ownerId: Schema.String,
@@ -42,6 +58,7 @@ const makeCoordinator = (options: {
   readonly finalizeGate?: Deferred.Deferred<void>;
   readonly finalizeStarted?: Deferred.Deferred<void>;
   readonly runStarted?: Deferred.Deferred<void>;
+  readonly completedRunTtl?: Duration.Input;
 }) =>
   WorkflowRunCoordinator.make<
     string,
@@ -102,7 +119,39 @@ const makeCoordinator = (options: {
           yield* Deferred.await(options.finalizeGate);
         }
       }),
-    completedRunTtl: "10 millis",
+    completedRunTtl: options.completedRunTtl ?? "10 millis",
+  });
+
+const makeValueKeyCoordinator = (options: {
+  readonly gate: Deferred.Deferred<void>;
+  readonly completedRunTtl?: Duration.Input;
+}) =>
+  WorkflowRunCoordinator.make<
+    string,
+    RunKey,
+    { readonly _tag: "Value"; readonly value: string; },
+    "test/WorkflowRunCoordinator",
+    typeof TestWorkflow.payloadSchema,
+    typeof TestWorkflow.successSchema,
+    typeof TestWorkflow.errorSchema,
+    { readonly ownerId: string; },
+    MissingRunError,
+    BusyError
+  >({
+    workflow: TestWorkflow,
+    ownerId: (payload) => payload.ownerId,
+    runId: (payload) => new RunKey(payload.runId),
+    missingRun: (runId) => new MissingRunError({ runId: runId.value }),
+    busy: (ownerId) => new BusyError({ ownerId }),
+    prepare: (payload) => Effect.succeed({ ownerId: payload.ownerId }),
+    run: Effect.fnUntraced(function*({ payload, mailbox }) {
+      yield* PubSub.publish(mailbox, [{ _tag: "Value", value: payload.runId }]);
+      if (payload.mode === "wait") {
+        yield* Deferred.await(options.gate);
+      }
+    }),
+    finalize: () => Effect.void,
+    completedRunTtl: options.completedRunTtl ?? "10 millis",
   });
 
 const finalizerCount = (scope: Scope.Scope) =>
@@ -294,6 +343,65 @@ describe("WorkflowRunCoordinator.make", () => {
     { timeout: 5000 },
   );
 
+  it.live("launch failure releases the run id reservation", () =>
+    Effect.gen(function*() {
+      const gate = yield* Deferred.make<void>();
+      let attempts = 0;
+      let executeWorkflow:
+        | ((
+          payload: typeof TestWorkflow.payloadSchema.Type,
+          executionId: string,
+        ) => Effect.Effect<void, RunFailed>)
+        | undefined;
+      const engine = Layer.succeed(
+        WorkflowEngine.WorkflowEngine,
+        WorkflowEngine.WorkflowEngine.of({
+          register: (_workflow, execute) =>
+            Effect.sync(() => {
+              executeWorkflow = execute as typeof executeWorkflow;
+            }),
+          execute: (workflow, options) =>
+            Effect.gen(function*() {
+              attempts++;
+              if (attempts === 1) {
+                return yield* Effect.fail(new RunFailed({ message: "launch failed" }));
+              }
+              if (executeWorkflow === undefined) {
+                return yield* Effect.die("workflow was not registered");
+              }
+              yield* executeWorkflow(
+                options.payload as typeof TestWorkflow.payloadSchema.Type,
+                options.executionId,
+              ).pipe(
+                Effect.provideService(
+                  WorkflowEngine.WorkflowInstance,
+                  WorkflowEngine.WorkflowInstance.initial(workflow, options.executionId),
+                ),
+                Effect.forkScoped,
+              );
+              return options.executionId;
+            }) as never,
+          poll: () => Effect.die("poll should not be called") as never,
+          interrupt: () => Effect.void,
+          interruptUnsafe: () => Effect.void,
+          resume: () => Effect.void,
+          activityExecute: () => Effect.die("activityExecute should not be called") as never,
+          deferredResult: () => Effect.die("deferredResult should not be called") as never,
+          deferredDone: () => Effect.void,
+          scheduleClock: () => Effect.void,
+        }),
+      );
+      const runs = yield* makeCoordinator({ gate }).pipe(Effect.provide(engine));
+
+      const first = yield* runs.start({ ownerId: "owner-1", runId: "run-1", mode: "success" }).pipe(
+        Effect.exit,
+      );
+      expect(first._tag).toBe("Failure");
+
+      const retry = yield* runs.start({ ownerId: "owner-1", runId: "run-1", mode: "success" });
+      expect(retry).toEqual({ runId: "run-1" });
+    }), { timeout: 5000 });
+
   it.live(
     "run failure releases the owner lock and removes the run entry",
     () =>
@@ -432,6 +540,29 @@ describe("WorkflowRunCoordinator.make", () => {
   );
 
   it.live(
+    "duplicate value-equal run ids are rejected",
+    () =>
+      Effect.gen(function*() {
+        const gate = yield* Deferred.make<void>();
+        const runs = yield* makeValueKeyCoordinator({ gate });
+
+        yield* Effect.gen(function*() {
+          yield* runs.start({ ownerId: "owner-1", runId: "run-1", mode: "wait" });
+
+          const duplicate = yield* runs.start({
+            ownerId: "owner-2",
+            runId: "run-1",
+            mode: "success",
+          }).pipe(
+            Effect.exit,
+          );
+          expect(duplicate._tag).toBe("Failure");
+        }).pipe(Effect.ensuring(Deferred.succeed(gate, undefined)));
+      }).pipe(Effect.provide(WorkflowEngine.layerMemory)),
+    { timeout: 5000 },
+  );
+
+  it.live(
     "duplicate completed run ids do not leave another owner locked",
     () =>
       Effect.gen(function*() {
@@ -461,6 +592,27 @@ describe("WorkflowRunCoordinator.make", () => {
   );
 
   it.live(
+    "resolve finds completed handoff runs by value-equal run id",
+    () =>
+      Effect.gen(function*() {
+        const gate = yield* Deferred.make<void>();
+        const runs = yield* makeValueKeyCoordinator({ gate, completedRunTtl: "1 hour" });
+
+        const { runId } = yield* runs.start({
+          ownerId: "owner-1",
+          runId: "run-1",
+          mode: "success",
+        });
+        yield* Effect.sleep("50 millis");
+
+        const resolved = yield* runs.resolve(new RunKey(runId.value));
+        const events = yield* resolved.events.pipe(Stream.runCollect);
+        expect(events).toEqual([{ _tag: "Value", value: "run-1" }]);
+      }).pipe(Effect.provide(WorkflowEngine.layerMemory)),
+    { timeout: 5000 },
+  );
+
+  it.live(
     "completed runs release coordinator scope resources",
     () =>
       Effect.gen(function*() {
@@ -478,6 +630,38 @@ describe("WorkflowRunCoordinator.make", () => {
 
           expect(finalizerCount(scope)).toBe(before);
         }).pipe(Effect.ensuring(Scope.close(scope, Exit.void)));
+      }),
+    { timeout: 5000 },
+  );
+
+  it.live(
+    "completed handoff entries clear when the coordinator scope closes",
+    () =>
+      Effect.gen(function*() {
+        const gate = yield* Deferred.make<void>();
+        const scope = yield* Scope.make();
+        const runs = yield* makeCoordinator({ gate, completedRunTtl: "1 hour" }).pipe(
+          Effect.provide(WorkflowEngine.layerMemory),
+          Scope.provide(scope),
+        );
+
+        const { runId } = yield* runs.start({
+          ownerId: "owner-1",
+          runId: "run-1",
+          mode: "success",
+        });
+        yield* Effect.sleep("50 millis");
+
+        const beforeClose = yield* runs.resolve(runId).pipe(
+          Effect.flatMap((run) => run.events.pipe(Stream.runCollect)),
+          Effect.exit,
+        );
+        expect(beforeClose._tag).toBe("Success");
+
+        yield* Scope.close(scope, Exit.void);
+
+        const afterClose = yield* runs.resolve(runId).pipe(Effect.exit);
+        expect(afterClose._tag).toBe("Failure");
       }),
     { timeout: 5000 },
   );

@@ -5,6 +5,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as HashMap from "effect/HashMap";
+import * as HashSet from "effect/HashSet";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as RcMap from "effect/RcMap";
@@ -56,7 +57,7 @@ export namespace WorkflowRunCoordinator {
 
       const state = yield* Ref.make({
         activeOwners: HashMap.empty<OwnerId, RunId>(),
-        runIds: new Set<RunId>(),
+        runIds: HashSet.empty<RunId>(),
         runs: HashMap.empty<
           RunId,
           | {
@@ -82,7 +83,7 @@ export namespace WorkflowRunCoordinator {
             replay: Infinity,
           }),
       });
-      const resources = new Map<
+      let resources: HashMap.HashMap<
         RunId,
         {
           readonly scope: Scope.Closeable;
@@ -91,15 +92,21 @@ export namespace WorkflowRunCoordinator {
           readonly completion: Ref.Ref<"Open" | "Completing" | "Done">;
           readonly metadata: Metadata;
         }
-      >();
-      const completedRuns = new Map<
+      > = HashMap.empty();
+      let completedRuns: HashMap.HashMap<
         RunId,
         {
           readonly ownerId: OwnerId;
           readonly mailbox: PubSub.PubSub<Take.Take<Event, Error["Type"]>>;
           readonly metadata: Metadata;
         }
-      >();
+      > = HashMap.empty();
+      yield* Scope.addFinalizer(
+        coordinatorScope,
+        Effect.sync(() => {
+          completedRuns = HashMap.empty();
+        }),
+      );
 
       const reserveRun = (
         ownerId: OwnerId,
@@ -107,18 +114,16 @@ export namespace WorkflowRunCoordinator {
         interrupt: Deferred.Deferred<void>,
       ) =>
         Ref.modify(state, (current) => {
-          if (HashMap.has(current.activeOwners, ownerId) || current.runIds.has(runId)) {
+          if (HashMap.has(current.activeOwners, ownerId) || HashSet.has(current.runIds, runId)) {
             return [false, current] as const;
           }
 
-          const runIds = new Set(current.runIds);
-          runIds.add(runId);
           return [
             true,
             {
               ...current,
               activeOwners: HashMap.set(current.activeOwners, ownerId, runId),
-              runIds,
+              runIds: HashSet.add(current.runIds, runId),
               runs: HashMap.set(current.runs, runId, { _tag: "Preparing", ownerId, interrupt }),
             },
           ] as const;
@@ -151,11 +156,6 @@ export namespace WorkflowRunCoordinator {
         readonly releaseRunId: boolean;
       }) =>
         Ref.update(state, (current) => {
-          const runIds = args.releaseRunId ? new Set(current.runIds) : current.runIds;
-          if (args.releaseRunId) {
-            runIds.delete(args.runId);
-          }
-
           return {
             ...current,
             activeOwners: Option.match(
@@ -168,7 +168,7 @@ export namespace WorkflowRunCoordinator {
                     : current.activeOwners,
               },
             ),
-            runIds,
+            runIds: args.releaseRunId ? HashSet.remove(current.runIds, args.runId) : current.runIds,
             runs: HashMap.remove(current.runs, args.runId),
           };
         });
@@ -196,16 +196,20 @@ export namespace WorkflowRunCoordinator {
         readonly cacheCompleted: boolean;
       }) =>
         Effect.gen(function*() {
-          const resource = resources.get(args.runId);
-          resources.delete(args.runId);
+          const resource = Option.getOrUndefined(HashMap.get(resources, args.runId));
+          resources = HashMap.remove(resources, args.runId);
           if (args.cacheCompleted && resource !== undefined) {
-            completedRuns.set(args.runId, {
+            completedRuns = HashMap.set(completedRuns, args.runId, {
               ownerId: args.ownerId,
               mailbox: resource.mailbox,
               metadata: resource.metadata,
             });
+            const deleteCompletedRun = Effect.sync(() => {
+              completedRuns = HashMap.remove(completedRuns, args.runId);
+            });
             yield* Effect.sleep(options.completedRunTtl).pipe(
-              Effect.andThen(Effect.sync(() => completedRuns.delete(args.runId))),
+              Effect.andThen(deleteCompletedRun),
+              Effect.ensuring(deleteCompletedRun),
               Effect.forkIn(coordinatorScope),
             );
           }
@@ -282,7 +286,7 @@ export namespace WorkflowRunCoordinator {
               Effect.die(error)
             ),
           );
-          const resource = resources.get(runId);
+          const resource = Option.getOrUndefined(HashMap.get(resources, runId));
           if (resource === undefined) {
             return yield* Effect.die(options.missingRun(runId));
           }
@@ -356,7 +360,7 @@ export namespace WorkflowRunCoordinator {
         resolve: Effect.fnUntraced(function*(runId: RunId) {
           const activeRun = yield* lookupActiveRun(runId).pipe(Effect.exit);
           if (Exit.isSuccess(activeRun)) {
-            const resource = resources.get(runId);
+            const resource = Option.getOrUndefined(HashMap.get(resources, runId));
             if (resource !== undefined) {
               return {
                 ownerId: activeRun.value.ownerId,
@@ -368,7 +372,7 @@ export namespace WorkflowRunCoordinator {
             }
           }
 
-          const completedRun = completedRuns.get(runId);
+          const completedRun = Option.getOrUndefined(HashMap.get(completedRuns, runId));
           if (completedRun !== undefined) {
             return {
               ownerId: completedRun.ownerId,
@@ -434,7 +438,7 @@ export namespace WorkflowRunCoordinator {
                 completion: yield* Ref.make<"Open" | "Completing" | "Done">("Open"),
                 metadata: activeRun.metadata,
               };
-              resources.set(runId, resource);
+              resources = HashMap.set(resources, runId, resource);
               yield* storeRun(runId, activeRun);
               yield* Scope.addFinalizer(
                 runScope,
@@ -477,7 +481,7 @@ export namespace WorkflowRunCoordinator {
                         ownerId,
                         runId,
                         ownerRef: resource.ownerRef,
-                        releaseRunId: false,
+                        releaseRunId: true,
                         cacheCompleted: false,
                       }),
                     ),
