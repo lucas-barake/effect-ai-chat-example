@@ -83,6 +83,7 @@ export namespace WorkflowRunCoordinator {
       const resources = new Map<
         RunId,
         {
+          readonly scope: Scope.Closeable;
           readonly mailbox: PubSub.PubSub<Take.Take<Event, Error["Type"]>>;
           readonly ownerRef: SubscriptionRef.SubscriptionRef<RunId | null>;
           readonly completion: Ref.Ref<"Open" | "Completing" | "Done">;
@@ -133,21 +134,33 @@ export namespace WorkflowRunCoordinator {
           runs: HashMap.set(current.runs, runId, run),
         }));
 
-      const removeRun = (ownerId: OwnerId, runId: RunId) =>
-        Ref.update(state, (current) => ({
-          ...current,
-          activeOwners: Option.match(
-            HashMap.get(current.activeOwners, ownerId),
-            {
-              onNone: () => current.activeOwners,
-              onSome: (activeRunId) =>
-                activeRunId === runId
-                  ? HashMap.remove(current.activeOwners, ownerId)
-                  : current.activeOwners,
-            },
-          ),
-          runs: HashMap.remove(current.runs, runId),
-        }));
+      const removeRun = (args: {
+        readonly ownerId: OwnerId;
+        readonly runId: RunId;
+        readonly releaseRunId: boolean;
+      }) =>
+        Ref.update(state, (current) => {
+          const runIds = args.releaseRunId ? new Set(current.runIds) : current.runIds;
+          if (args.releaseRunId) {
+            runIds.delete(args.runId);
+          }
+
+          return {
+            ...current,
+            activeOwners: Option.match(
+              HashMap.get(current.activeOwners, args.ownerId),
+              {
+                onNone: () => current.activeOwners,
+                onSome: (activeRunId) =>
+                  activeRunId === args.runId
+                    ? HashMap.remove(current.activeOwners, args.ownerId)
+                    : current.activeOwners,
+              },
+            ),
+            runIds,
+            runs: HashMap.remove(current.runs, args.runId),
+          };
+        });
 
       const lookupRun = (runId: RunId) =>
         Ref.get(state).pipe(
@@ -167,17 +180,22 @@ export namespace WorkflowRunCoordinator {
       const cleanupRun = (args: {
         readonly ownerId: OwnerId;
         readonly runId: RunId;
-        readonly ownerRef?: SubscriptionRef.SubscriptionRef<RunId | null>;
+        readonly ownerRef: SubscriptionRef.SubscriptionRef<RunId | null> | undefined;
+        readonly releaseRunId: boolean;
       }) =>
         Effect.gen(function*() {
+          const resource = resources.get(args.runId);
+          resources.delete(args.runId);
           if (args.ownerRef) {
             yield* SubscriptionRef.updateSome(args.ownerRef, (current) =>
               current === args.runId
                 ? Option.some<RunId | null>(null)
                 : Option.none());
           }
-          yield* removeRun(args.ownerId, args.runId);
-          resources.delete(args.runId);
+          yield* removeRun(args);
+          if (resource !== undefined) {
+            yield* Scope.close(resource.scope, Exit.void);
+          }
           yield* RcMap.invalidate(eventChannels, args.runId);
         });
 
@@ -219,6 +237,7 @@ export namespace WorkflowRunCoordinator {
                       ownerId: args.ownerId,
                       runId: args.runId,
                       ownerRef: args.ownerRef,
+                      releaseRunId: false,
                     }),
                   ),
                   Effect.onExit((exit) =>
@@ -338,7 +357,12 @@ export namespace WorkflowRunCoordinator {
                 Effect.interruptible(options.prepare(payload)),
               );
               if (Exit.isFailure(metadataExit)) {
-                yield* cleanupRun({ ownerId, runId });
+                yield* cleanupRun({
+                  ownerId,
+                  runId,
+                  ownerRef: undefined,
+                  releaseRunId: true,
+                });
                 return yield* Effect.failCause(metadataExit.cause);
               }
 
@@ -349,15 +373,17 @@ export namespace WorkflowRunCoordinator {
                 executionId: yield* options.workflow.executionId(payload),
                 interrupt,
               };
+              const runScope = yield* Scope.fork(coordinatorScope);
               const resource = {
-                mailbox: yield* Scope.provide(RcMap.get(eventChannels, runId), coordinatorScope),
-                ownerRef: yield* Scope.provide(RcMap.get(ownerChanges, ownerId), coordinatorScope),
+                scope: runScope,
+                mailbox: yield* Scope.provide(RcMap.get(eventChannels, runId), runScope),
+                ownerRef: yield* Scope.provide(RcMap.get(ownerChanges, ownerId), runScope),
                 completion: yield* Ref.make<"Open" | "Completing" | "Done">("Open"),
               };
               resources.set(runId, resource);
               yield* storeRun(runId, activeRun);
               yield* Scope.addFinalizer(
-                coordinatorScope,
+                runScope,
                 Effect.gen(function*() {
                   yield* Deferred.succeed(interrupt, undefined);
                   const interruptExit = yield* Effect.exit(Effect.interrupt);
@@ -391,7 +417,16 @@ export namespace WorkflowRunCoordinator {
                     metadata: activeRun.metadata,
                     exit: Exit.failCause(launchExit.cause),
                   })
-                  .pipe(Effect.ensuring(cleanupRun({ ownerId, runId })));
+                  .pipe(
+                    Effect.ensuring(
+                      cleanupRun({
+                        ownerId,
+                        runId,
+                        ownerRef: resource.ownerRef,
+                        releaseRunId: false,
+                      }),
+                    ),
+                  );
                 return yield* Effect.failCause(launchExit.cause);
               }
 

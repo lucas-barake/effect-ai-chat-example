@@ -2,9 +2,11 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as PubSub from "effect/PubSub";
 import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as Workflow from "effect/unstable/workflow/Workflow";
 import * as WorkflowEngine from "effect/unstable/workflow/WorkflowEngine";
@@ -101,6 +103,9 @@ const makeCoordinator = (options: {
         }
       }),
   });
+
+const finalizerCount = (scope: Scope.Scope) =>
+  scope.state._tag === "Open" ? scope.state.finalizers.size : 0;
 
 describe("WorkflowRunCoordinator.make", () => {
   it.live("changes emit start and finish transitions", () =>
@@ -203,6 +208,25 @@ describe("WorkflowRunCoordinator.make", () => {
 
         const second = yield* runs.start({ ownerId: "owner-1", runId: "run-2", mode: "success" });
         expect(second).toEqual({ runId: "run-2" });
+      }).pipe(Effect.provide(WorkflowEngine.layerMemory)),
+    { timeout: 5000 },
+  );
+
+  it.live(
+    "prepare failure releases the run id reservation",
+    () =>
+      Effect.gen(function*() {
+        const gate = yield* Deferred.make<void>();
+        const runs = yield* makeCoordinator({ gate });
+
+        yield* runs.start({
+          ownerId: "owner-1",
+          runId: "run-1",
+          mode: "prepare-fail",
+        }).pipe(Effect.exit);
+
+        const retry = yield* runs.start({ ownerId: "owner-1", runId: "run-1", mode: "success" });
+        expect(retry).toEqual({ runId: "run-1" });
       }).pipe(Effect.provide(WorkflowEngine.layerMemory)),
     { timeout: 5000 },
   );
@@ -311,8 +335,8 @@ describe("WorkflowRunCoordinator.make", () => {
           yield* Fiber.interrupt(startFiber).pipe(Effect.forkChild);
           yield* Effect.yieldNow;
 
-          const second = yield* runs.start({ ownerId: "owner-1", runId: "run-2", mode: "success" });
-          expect(second).toEqual({ runId: "run-2" });
+          const second = yield* runs.start({ ownerId: "owner-1", runId: "run-1", mode: "success" });
+          expect(second).toEqual({ runId: "run-1" });
         }).pipe(
           Effect.ensuring(Deferred.succeed(gate, undefined)),
           Effect.ensuring(Deferred.succeed(prepareGate, undefined)),
@@ -405,6 +429,28 @@ describe("WorkflowRunCoordinator.make", () => {
         const second = yield* runs.start({ ownerId: "owner-2", runId: "run-2", mode: "success" });
         expect(second).toEqual({ runId: "run-2" });
       }).pipe(Effect.provide(WorkflowEngine.layerMemory)),
+    { timeout: 5000 },
+  );
+
+  it.live(
+    "completed runs release coordinator scope resources",
+    () =>
+      Effect.gen(function*() {
+        const gate = yield* Deferred.make<void>();
+        const scope = yield* Scope.make();
+        yield* Effect.gen(function*() {
+          const runs = yield* makeCoordinator({ gate }).pipe(
+            Effect.provide(WorkflowEngine.layerMemory),
+            Scope.provide(scope),
+          );
+          const before = finalizerCount(scope);
+
+          yield* runs.start({ ownerId: "owner-1", runId: "run-1", mode: "success" });
+          yield* Effect.sleep("100 millis");
+
+          expect(finalizerCount(scope)).toBe(before);
+        }).pipe(Effect.ensuring(Scope.close(scope, Exit.void)));
+      }),
     { timeout: 5000 },
   );
 });
