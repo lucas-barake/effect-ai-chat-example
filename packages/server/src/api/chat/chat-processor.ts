@@ -8,7 +8,7 @@ import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import * as AiChat from "effect/unstable/ai/Chat";
+import * as LanguageModel from "effect/unstable/ai/LanguageModel";
 import * as Prompt from "effect/unstable/ai/Prompt";
 import type * as Response from "effect/unstable/ai/Response";
 import { ChatMailbox, ChatToolkit } from "./chat-toolkit.js";
@@ -28,15 +28,16 @@ export class ChatProcessor extends Context.Service<ChatProcessor>()(
           role: "user",
           content: message,
         };
-        const prompt = makePrompt([...chat.messages, userMsg]);
-        const aichat = yield* AiChat.fromPrompt(prompt);
 
         const newMessages: Array<typeof Chat.Message.Type> = [];
 
         let cont = true;
         while (cont) {
-          const result = yield* aichat
-            .streamText({ prompt: Prompt.empty, toolkit })
+          const result = yield* LanguageModel
+            .streamText({
+              prompt: makePrompt([...chat.messages, userMsg, ...newMessages]),
+              toolkit,
+            })
             .pipe(
               Stream.runFoldEffect(
                 () => ({

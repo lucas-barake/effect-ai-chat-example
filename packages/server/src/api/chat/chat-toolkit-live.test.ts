@@ -98,6 +98,37 @@ describe("chat toolkit handlers", () => {
       expect(evts[1]!._tag).toBe("ToolSuccess");
     }));
 
+  it.effect("getWeather accepts numeric string coordinates from local model tool calls", () =>
+    Effect.gen(function*() {
+      const { mailbox, events } = yield* makeMailbox;
+
+      const response = yield* LanguageModel.generateText({
+        prompt: "What's the weather?",
+        toolkit: ChatToolkit,
+      }).pipe(
+        withLanguageModel({
+          generateText: [{
+            type: "tool-call",
+            id: "t1",
+            name: "getWeather",
+            params: { latitude: "40.7", longitude: "-74.0" },
+          }],
+        }),
+        Effect.provideService(ChatMailbox, mailbox),
+        Effect.provide(TestHandlers),
+      );
+
+      expect(response.toolResults).toHaveLength(1);
+      expect(response.toolResults[0]!.isFailure).toBe(false);
+
+      const evts = yield* events(2);
+      expect(evts[0]).toMatchObject({
+        _tag: "ToolStart",
+        input: JSON.stringify({ latitude: 40.7, longitude: -74 }),
+      });
+      expect(evts[1]!._tag).toBe("ToolSuccess");
+    }));
+
   it.effect("getWeather failure emits ToolFailure and returns error to model", () =>
     Effect.gen(function*() {
       const { mailbox, events } = yield* makeMailbox;

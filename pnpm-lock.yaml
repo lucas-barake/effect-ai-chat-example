@@ -12,7 +12,7 @@ overrides:
   '@effect/sql-pg': 4.0.0-beta.88
   '@effect/vitest': 4.0.0-beta.88
   '@effect/atom-react': 4.0.0-beta.88
-  '@effect/ai-anthropic': 4.0.0-beta.88
+  '@effect/ai-openai-compat': 4.0.0-beta.88
   '@effect/opentelemetry': 4.0.0-beta.88
   '@opentelemetry/sdk-trace-base': 2.8.0
   '@opentelemetry/sdk-trace-node': 2.8.0
@@ -129,7 +129,7 @@ importers:
       '@app/domain':
         specifier: workspace:^
         version: link:../domain
-      '@effect/ai-anthropic':
+      '@effect/ai-openai-compat':
         specifier: 4.0.0-beta.88
         version: 4.0.0-beta.88(effect@4.0.0-beta.88)
       '@effect/opentelemetry':
@@ -386,8 +386,8 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@effect/ai-anthropic@4.0.0-beta.88':
-    resolution: {integrity: sha512-EAQyPsBEYpiGyxUVc6Q/QCOLjJKEs57ItNKpqHgI9ejaPeUcfgEwuKNtOK6buAgRt1t6whBvlyQopZ5HFZvfJg==}
+  '@effect/ai-openai-compat@4.0.0-beta.88':
+    resolution: {integrity: sha512-8L5JgdQCG+0wzZm68w7PfbeEigVBM3V7xJjyHJjDBb+F3sNCWgWcCNAAuB3aL+JNYopsRtAbS9CilDtvjUPS0w==}
     peerDependencies:
       effect: 4.0.0-beta.88
 
@@ -4077,7 +4077,7 @@ snapshots:
   '@dprint/win32-x64@0.48.0':
     optional: true
 
-  '@effect/ai-anthropic@4.0.0-beta.88(effect@4.0.0-beta.88)':
+  '@effect/ai-openai-compat@4.0.0-beta.88(effect@4.0.0-beta.88)':
     dependencies:
       effect: 4.0.0-beta.88
 

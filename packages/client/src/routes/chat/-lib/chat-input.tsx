@@ -57,6 +57,7 @@ export const ChatInput = ({ chatId }: { readonly chatId: ChatId; }) => {
                 onPress={() => {
                   interrupt(undefined);
                 }}
+                aria-label="Stop generation"
                 className="p-2 rounded-lg bg-danger/20 text-danger hover:bg-danger/30 transition-colors cursor-pointer"
               >
                 <StopCircleIcon className="size-4" />
@@ -66,6 +67,7 @@ export const ChatInput = ({ chatId }: { readonly chatId: ChatId; }) => {
               <Button
                 onPress={handleSubmit}
                 isDisabled={!input.trim()}
+                aria-label="Send message"
                 className="p-2 rounded-lg bg-primary text-primary-foreground hover:bg-primary-hover transition-colors disabled:opacity-40 cursor-pointer disabled:cursor-not-allowed"
               >
                 <ArrowUpIcon className="size-4" />

@@ -9,8 +9,8 @@ import { Button, ListBox, ListBoxItem, Popover, Select, SelectValue } from "reac
 import { chatListAtom, createChatAtom, deleteChatFamily, selectedModelAtom } from "./chat-atoms.js";
 
 const MODEL_LABELS: Record<ModelFamily, string> = {
-  "sonnet-4.6": "Sonnet 4.6",
-  "haiku-4.5": "Haiku 4.5",
+  "qwen3.6-uncensored:35b": "Qwen 3.6 35B",
+  "llama3.2": "Llama 3.2",
 };
 
 export const ChatSidebar = () => {
@@ -35,6 +35,7 @@ export const ChatSidebar = () => {
         <div className="flex items-center gap-2">
           <Select
             selectedKey={selectedModel}
+            aria-label="Model"
             onSelectionChange={(key) => {
               setSelectedModel(key as ModelFamily);
             }}
@@ -60,6 +61,7 @@ export const ChatSidebar = () => {
           </Select>
           <Button
             onPress={handleNewChat}
+            aria-label="New chat"
             className="p-2 rounded-lg text-muted hover:text-foreground hover:bg-elevated transition-colors cursor-pointer"
           >
             <MessageSquarePlusIcon className="size-4" />
@@ -129,6 +131,7 @@ const ChatListItem = ({
       <span className="truncate flex-1">{chat.title}</span>
       <button
         onClick={handleDelete}
+        aria-label={`Delete ${chat.title}`}
         className="opacity-0 group-hover:opacity-100 p-1 rounded text-muted hover:text-danger transition-all cursor-pointer"
       >
         <Trash2Icon className="size-3.5" />

@@ -47,7 +47,7 @@ const makeChat = ({
 }) => ({
   id: chatId,
   title: "Test Chat",
-  model: "haiku-4.5" as const,
+  model: "llama3.2" as const,
   createdAt: new Date() as never,
   updatedAt: new Date() as never,
   messages,
@@ -637,25 +637,25 @@ describe("chat atoms", () => {
     expect(registry.get(generatingFamily(TEST_CHAT_ID))).toBe(true);
   });
 
-  it("selectedModelAtom falls back to sonnet-4.6 on storage read failure", async () => {
+  it("selectedModelAtom falls back to qwen3.6-uncensored:35b on storage read failure", async () => {
     const { registry } = makeRegistry({ failGet: true });
 
     registry.mount(selectedModelAtom);
     await flush();
 
-    expect(registry.get(selectedModelAtom)).toBe("sonnet-4.6");
+    expect(registry.get(selectedModelAtom)).toBe("qwen3.6-uncensored:35b");
   });
 
   it("selectedModelAtom persists model changes through KeyValueStore", async () => {
-    const { preferences, registry } = makeRegistry({ initialModel: "haiku-4.5" });
+    const { preferences, registry } = makeRegistry({ initialModel: "llama3.2" });
 
     registry.mount(selectedModelAtom);
     await flush();
 
-    expect(registry.get(selectedModelAtom)).toBe("haiku-4.5");
-    registry.set(selectedModelAtom, "sonnet-4.6");
+    expect(registry.get(selectedModelAtom)).toBe("llama3.2");
+    registry.set(selectedModelAtom, "qwen3.6-uncensored:35b");
     await flush();
-    expect(preferences.getModel()).toBe(JSON.stringify("sonnet-4.6"));
+    expect(preferences.getModel()).toBe(JSON.stringify("qwen3.6-uncensored:35b"));
   });
 
   it("deleteChatFamily clears local state for only one chat", async () => {

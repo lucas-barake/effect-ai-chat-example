@@ -32,10 +32,10 @@ describe("ChatRepo", () => {
           const chat = yield* repo.create({
             userId: "user-1",
             title: "My Chat",
-            model: "haiku-4.5",
+            model: "llama3.2",
           });
           expect(chat.title).toBe("My Chat");
-          expect(chat.model).toBe("haiku-4.5");
+          expect(chat.model).toBe("llama3.2");
           expect(chat.userId).toBe("user-1");
           expect(chat.id).toBeDefined();
           expect(chat.createdAt).toBeDefined();
@@ -51,7 +51,7 @@ describe("ChatRepo", () => {
           const created = yield* repo.create({
             userId: "user-1",
             title: "Find Me",
-            model: "haiku-4.5",
+            model: "llama3.2",
           });
           const found = yield* repo.findById(created.id, "user-1");
           expect(found.id).toBe(created.id);
@@ -66,7 +66,7 @@ describe("ChatRepo", () => {
           const created = yield* repo.create({
             userId: "user-1",
             title: "Secret",
-            model: "haiku-4.5",
+            model: "llama3.2",
           });
           const exit = yield* repo.findById(created.id, "user-2").pipe(Effect.exit);
           expect(exit._tag).toBe("Failure");
@@ -87,9 +87,9 @@ describe("ChatRepo", () => {
       withTransactionRollback(
         Effect.gen(function*() {
           const repo = yield* ChatRepo;
-          yield* repo.create({ userId: "user-1", title: "Chat A", model: "haiku-4.5" });
-          yield* repo.create({ userId: "user-1", title: "Chat B", model: "haiku-4.5" });
-          yield* repo.create({ userId: "user-2", title: "Other User", model: "haiku-4.5" });
+          yield* repo.create({ userId: "user-1", title: "Chat A", model: "llama3.2" });
+          yield* repo.create({ userId: "user-1", title: "Chat B", model: "llama3.2" });
+          yield* repo.create({ userId: "user-2", title: "Other User", model: "llama3.2" });
 
           const result = yield* repo.listByUser("user-1", Option.none());
           expect(result.items).toHaveLength(2);
@@ -104,8 +104,8 @@ describe("ChatRepo", () => {
       withTransactionRollback(
         Effect.gen(function*() {
           const repo = yield* ChatRepo;
-          yield* repo.create({ userId: "user-1", title: "Old", model: "haiku-4.5" });
-          const newer = yield* repo.create({ userId: "user-1", title: "New", model: "haiku-4.5" });
+          yield* repo.create({ userId: "user-1", title: "Old", model: "llama3.2" });
+          const newer = yield* repo.create({ userId: "user-1", title: "New", model: "llama3.2" });
 
           const result = yield* repo.listByUser("user-1", Option.some(newer.updatedAt));
           expect(result.items.every((c) => c.title !== "New")).toBe(true);
@@ -119,7 +119,7 @@ describe("ChatRepo", () => {
           const chat = yield* repo.create({
             userId: "user-1",
             title: "Delete Me",
-            model: "haiku-4.5",
+            model: "llama3.2",
           });
           yield* repo.delete(chat.id, "user-1");
           const exit = yield* repo.findById(chat.id, "user-1").pipe(Effect.exit);
@@ -131,7 +131,7 @@ describe("ChatRepo", () => {
       withTransactionRollback(
         Effect.gen(function*() {
           const repo = yield* ChatRepo;
-          const chat = yield* repo.create({ userId: "user-1", title: "Mine", model: "haiku-4.5" });
+          const chat = yield* repo.create({ userId: "user-1", title: "Mine", model: "llama3.2" });
           const exit = yield* repo.delete(chat.id, "user-2").pipe(Effect.exit);
           expect(exit._tag).toBe("Failure");
         }),

@@ -24,8 +24,8 @@ const getWeather = Tool.make("getWeather", {
   description: "Get current weather for a location",
   failureMode: "return",
   parameters: Schema.Struct({
-    latitude: Schema.Number,
-    longitude: Schema.Number,
+    latitude: Schema.Union([Schema.Number, Schema.NumberFromString]),
+    longitude: Schema.Union([Schema.Number, Schema.NumberFromString]),
   }),
   success: Schema.String,
   failure: WeatherApiError,

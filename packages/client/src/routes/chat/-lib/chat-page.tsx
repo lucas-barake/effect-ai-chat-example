@@ -1,5 +1,5 @@
-import type { ChatId } from "@app/domain/api/chat-rpc";
-import { useAtomSet, useAtomValue } from "@effect/atom-react";
+import type { ChatId, RunId } from "@app/domain/api/chat-rpc";
+import { useAtomSet, useAtomSubscribe, useAtomValue } from "@effect/atom-react";
 import { AsyncResult } from "effect/unstable/reactivity";
 import { Loader2Icon } from "lucide-react";
 import * as React from "react";
@@ -11,22 +11,65 @@ export const ChatPage = ({ chatId }: { readonly chatId: ChatId; }) => {
   const chatAtom = chatDataFamily(chatId);
   const watchAtom = watchChatFamily(chatId);
   const chatResult = useAtomValue(chatAtom);
-  const watchResult = useAtomValue(watchAtom);
   const setWatchChat = useAtomSet(watchAtom);
+  const latestChatRef = React.useRef<
+    {
+      readonly chatId: ChatId;
+      readonly activeRunId: RunId | null;
+    } | null
+  >(null);
+  const watchedChatRef = React.useRef<
+    {
+      readonly chatId: ChatId;
+      readonly activeRunId: RunId | null;
+    } | null
+  >(null);
+  const watchStartableRef = React.useRef(true);
 
-  const activeRunId = AsyncResult.isSuccess(chatResult)
-    ? chatResult.value.activeRunId
-    : undefined;
-
-  React.useEffect(() => {
-    if (activeRunId === undefined) {
+  const startWatch = React.useCallback(() => {
+    if (latestChatRef.current?.chatId !== chatId) {
       return;
     }
-    if (!AsyncResult.isInitial(watchResult) && !AsyncResult.isFailure(watchResult)) {
+    if (
+      watchedChatRef.current?.chatId === chatId
+      && watchedChatRef.current.activeRunId === latestChatRef.current.activeRunId
+    ) {
       return;
     }
-    setWatchChat({ activeRunId });
-  }, [activeRunId, setWatchChat, watchResult]);
+    if (!watchStartableRef.current) {
+      return;
+    }
+    watchedChatRef.current = latestChatRef.current;
+    setWatchChat({ activeRunId: latestChatRef.current.activeRunId });
+  }, [chatId, setWatchChat]);
+
+  useAtomSubscribe(
+    watchAtom,
+    React.useCallback((nextWatchResult) => {
+      watchStartableRef.current = AsyncResult.isInitial(nextWatchResult)
+        || AsyncResult.isFailure(nextWatchResult);
+      startWatch();
+    }, [startWatch]),
+    { immediate: true },
+  );
+
+  useAtomSubscribe(
+    chatAtom,
+    React.useCallback((nextChatResult) => {
+      if (AsyncResult.isSuccess(nextChatResult)) {
+        latestChatRef.current = {
+          chatId,
+          activeRunId: nextChatResult.value.activeRunId,
+        };
+        startWatch();
+        return;
+      }
+      if (latestChatRef.current?.chatId === chatId) {
+        latestChatRef.current = null;
+      }
+    }, [chatId, startWatch]),
+    { immediate: true },
+  );
 
   if (
     AsyncResult.isInitial(chatResult) || (chatResult.waiting && !AsyncResult.isSuccess(chatResult))

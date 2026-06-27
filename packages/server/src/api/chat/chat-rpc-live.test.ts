@@ -25,7 +25,7 @@ const mockChat = (
   id: Chat.ChatId.make("00000000-0000-4000-8000-000000000001"),
   userId: "00000000-0000-4000-8000-000000000001",
   title: "Test Chat",
-  model: "haiku-4.5",
+  model: "llama3.2",
   messages: [],
   activeRunId: null,
   createdAt: DateTime.nowUnsafe(),
@@ -116,10 +116,10 @@ describe("ChatRpc", () => {
       const client = yield* RpcTest.makeClient(Chat.ChatRpc);
       const result = yield* client.chat_create({
         title: "New Chat",
-        model: "haiku-4.5",
+        model: "llama3.2",
       });
       expect(result.title).toBe("New Chat");
-      expect(result.model).toBe("haiku-4.5");
+      expect(result.model).toBe("llama3.2");
     }).pipe(Effect.provide(TestLayer)));
 
   it.effect("chat_list returns items and hasMore", () =>

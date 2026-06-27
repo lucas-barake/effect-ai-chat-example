@@ -50,7 +50,7 @@ export const selectedModelAtom = Atom.kvs({
   runtime: preferencesRuntime,
   key: "@app/chat/selected-model",
   schema: ModelFamily,
-  defaultValue: () => "sonnet-4.6" as const,
+  defaultValue: () => "qwen3.6-uncensored:35b" as const,
 });
 
 const convertPersistedMessages = (

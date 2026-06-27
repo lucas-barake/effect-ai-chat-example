@@ -35,7 +35,7 @@
       "@effect/sql-pg": "4.0.0-beta.88",
       "@effect/vitest": "4.0.0-beta.88",
       "@effect/atom-react": "4.0.0-beta.88",
-      "@effect/ai-anthropic": "4.0.0-beta.88",
+      "@effect/ai-openai-compat": "4.0.0-beta.88",
       "@effect/opentelemetry": "4.0.0-beta.88",
       "@opentelemetry/sdk-trace-base": "2.8.0",
       "@opentelemetry/sdk-trace-node": "2.8.0",

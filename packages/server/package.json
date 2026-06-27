@@ -8,7 +8,7 @@
   },
   "dependencies": {
     "@app/domain": "workspace:^",
-    "@effect/ai-anthropic": "*",
+    "@effect/ai-openai-compat": "*",
     "@effect/opentelemetry": "*",
     "@effect/platform-bun": "*",
     "@effect/platform-node": "*",

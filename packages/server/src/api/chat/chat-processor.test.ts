@@ -45,7 +45,7 @@ const mockChat = (overrides?: Partial<typeof ChatModel.Type>): typeof ChatModel.
   id: Chat.ChatId.make("00000000-0000-4000-8000-000000000001"),
   userId: "user-1",
   title: "Test Chat",
-  model: "haiku-4.5",
+  model: "llama3.2",
   messages: [],
   activeRunId: null,
   createdAt: DateTime.nowUnsafe(),
