@@ -251,7 +251,7 @@ describe("ChatRunManager", () => {
     }).pipe(Effect.provide(makeTestLayer(slowAi)));
   }, { timeout: 5000 });
 
-  it.live("completed run invalidates the run stream entry", () =>
+  it.live("completed run replays events to a late subscriber", () =>
     Effect.gen(function*() {
       const mgr = yield* ChatRunManager;
       const chat = mockChat();
@@ -262,18 +262,14 @@ describe("ChatRunManager", () => {
       });
       yield* Effect.sleep("200 millis");
 
-      const exit = yield* mgr.subscribe(runId, chat.userId).pipe(Stream.runDrain, Effect.exit);
-      expect(exit._tag).toBe("Failure");
-      if (exit._tag === "Failure") {
-        expect(
-          exit.cause.reasons.some((reason) =>
-            reason._tag === "Fail" && reason.error._tag === "ChatRunNotFoundError"
-          ),
-        ).toBe(true);
+      const exit = yield* mgr.subscribe(runId, chat.userId).pipe(Stream.runCollect, Effect.exit);
+      expect(exit._tag).toBe("Success");
+      if (exit._tag === "Success") {
+        expect(exit.value.some((event) => event._tag === "Chunk")).toBe(true);
       }
     }).pipe(Effect.provide(makeTestLayer())), { timeout: 5000 });
 
-  it.live("interrupted run invalidates the run stream entry", () => {
+  it.live("interrupted run replays terminal interrupt to a late subscriber", () => {
     const slowAi = Layer.mock(AiModels)({
       use: (_model) => (effect) =>
         withLanguageModel(effect, {
@@ -299,11 +295,7 @@ describe("ChatRunManager", () => {
       const exit = yield* mgr.subscribe(runId, chat.userId).pipe(Stream.runDrain, Effect.exit);
       expect(exit._tag).toBe("Failure");
       if (exit._tag === "Failure") {
-        expect(
-          exit.cause.reasons.some((reason) =>
-            reason._tag === "Fail" && reason.error._tag === "ChatRunNotFoundError"
-          ),
-        ).toBe(true);
+        expect(Cause.hasInterruptsOnly(exit.cause)).toBe(true);
       }
     }).pipe(Effect.provide(makeTestLayer(slowAi)));
   }, { timeout: 5000 });

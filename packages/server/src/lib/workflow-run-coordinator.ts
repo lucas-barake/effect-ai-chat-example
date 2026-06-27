@@ -1,5 +1,6 @@
 import type * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
+import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -47,6 +48,7 @@ export namespace WorkflowRunCoordinator {
       readonly metadata: Metadata;
       readonly exit: Exit.Exit<Success["Type"], Error["Type"]>;
     }) => Effect.Effect<void>;
+    readonly completedRunTtl: Duration.Input;
   }) =>
     Effect.gen(function*() {
       const workflowEngine = yield* WorkflowEngine.WorkflowEngine;
@@ -87,6 +89,15 @@ export namespace WorkflowRunCoordinator {
           readonly mailbox: PubSub.PubSub<Take.Take<Event, Error["Type"]>>;
           readonly ownerRef: SubscriptionRef.SubscriptionRef<RunId | null>;
           readonly completion: Ref.Ref<"Open" | "Completing" | "Done">;
+          readonly metadata: Metadata;
+        }
+      >();
+      const completedRuns = new Map<
+        RunId,
+        {
+          readonly ownerId: OwnerId;
+          readonly mailbox: PubSub.PubSub<Take.Take<Event, Error["Type"]>>;
+          readonly metadata: Metadata;
         }
       >();
 
@@ -182,10 +193,22 @@ export namespace WorkflowRunCoordinator {
         readonly runId: RunId;
         readonly ownerRef: SubscriptionRef.SubscriptionRef<RunId | null> | undefined;
         readonly releaseRunId: boolean;
+        readonly cacheCompleted: boolean;
       }) =>
         Effect.gen(function*() {
           const resource = resources.get(args.runId);
           resources.delete(args.runId);
+          if (args.cacheCompleted && resource !== undefined) {
+            completedRuns.set(args.runId, {
+              ownerId: args.ownerId,
+              mailbox: resource.mailbox,
+              metadata: resource.metadata,
+            });
+            yield* Effect.sleep(options.completedRunTtl).pipe(
+              Effect.andThen(Effect.sync(() => completedRuns.delete(args.runId))),
+              Effect.forkIn(coordinatorScope),
+            );
+          }
           if (args.ownerRef) {
             yield* SubscriptionRef.updateSome(args.ownerRef, (current) =>
               current === args.runId
@@ -238,6 +261,7 @@ export namespace WorkflowRunCoordinator {
                       runId: args.runId,
                       ownerRef: args.ownerRef,
                       releaseRunId: false,
+                      cacheCompleted: true,
                     }),
                   ),
                   Effect.onExit((exit) =>
@@ -330,15 +354,32 @@ export namespace WorkflowRunCoordinator {
           ),
 
         resolve: Effect.fnUntraced(function*(runId: RunId) {
-          const run = yield* lookupActiveRun(runId);
-          const mailbox = yield* RcMap.get(eventChannels, runId);
-          return {
-            ownerId: run.ownerId,
-            metadata: run.metadata,
-            events: Stream.unwrap(
-              Effect.succeed(Stream.fromPubSubTake(mailbox)),
-            ),
-          } as const;
+          const activeRun = yield* lookupActiveRun(runId).pipe(Effect.exit);
+          if (Exit.isSuccess(activeRun)) {
+            const resource = resources.get(runId);
+            if (resource !== undefined) {
+              return {
+                ownerId: activeRun.value.ownerId,
+                metadata: activeRun.value.metadata,
+                events: Stream.unwrap(
+                  Effect.succeed(Stream.fromPubSubTake(resource.mailbox)),
+                ),
+              } as const;
+            }
+          }
+
+          const completedRun = completedRuns.get(runId);
+          if (completedRun !== undefined) {
+            return {
+              ownerId: completedRun.ownerId,
+              metadata: completedRun.metadata,
+              events: Stream.unwrap(
+                Effect.succeed(Stream.fromPubSubTake(completedRun.mailbox)),
+              ),
+            } as const;
+          }
+
+          return yield* Effect.fail(options.missingRun(runId));
         }),
 
         start: Effect.fnUntraced(function*(payload: Payload["Type"]) {
@@ -362,8 +403,20 @@ export namespace WorkflowRunCoordinator {
                   runId,
                   ownerRef: undefined,
                   releaseRunId: true,
+                  cacheCompleted: false,
                 });
                 return yield* Effect.failCause(metadataExit.cause);
+              }
+
+              if (yield* Deferred.isDone(interrupt)) {
+                yield* cleanupRun({
+                  ownerId,
+                  runId,
+                  ownerRef: undefined,
+                  releaseRunId: true,
+                  cacheCompleted: false,
+                });
+                return { runId } as const;
               }
 
               const activeRun = {
@@ -379,6 +432,7 @@ export namespace WorkflowRunCoordinator {
                 mailbox: yield* Scope.provide(RcMap.get(eventChannels, runId), runScope),
                 ownerRef: yield* Scope.provide(RcMap.get(ownerChanges, ownerId), runScope),
                 completion: yield* Ref.make<"Open" | "Completing" | "Done">("Open"),
+                metadata: activeRun.metadata,
               };
               resources.set(runId, resource);
               yield* storeRun(runId, activeRun);
@@ -424,6 +478,7 @@ export namespace WorkflowRunCoordinator {
                         runId,
                         ownerRef: resource.ownerRef,
                         releaseRunId: false,
+                        cacheCompleted: false,
                       }),
                     ),
                   );

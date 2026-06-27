@@ -102,6 +102,7 @@ const makeCoordinator = (options: {
           yield* Deferred.await(options.finalizeGate);
         }
       }),
+    completedRunTtl: "10 millis",
   });
 
 const finalizerCount = (scope: Scope.Scope) =>
@@ -262,6 +263,33 @@ describe("WorkflowRunCoordinator.make", () => {
 
         const second = yield* runs.start({ ownerId: "owner-1", runId: "run-2", mode: "success" });
         expect(second).toEqual({ runId: "run-2" });
+      }).pipe(Effect.provide(WorkflowEngine.layerMemory)),
+    { timeout: 5000 },
+  );
+
+  it.live(
+    "interrupt during prepare releases the run id reservation",
+    () =>
+      Effect.gen(function*() {
+        const gate = yield* Deferred.make<void>();
+        const prepareGate = yield* Deferred.make<void>();
+        const prepareStarted = yield* Deferred.make<void>();
+        const runs = yield* makeCoordinator({ gate, prepareGate, prepareStarted });
+
+        const startFiber = yield* runs.start({
+          ownerId: "owner-1",
+          runId: "run-1",
+          mode: "prepare-wait",
+        }).pipe(Effect.forkChild);
+
+        yield* Deferred.await(prepareStarted);
+        yield* runs.interrupt("owner-1");
+        yield* Deferred.succeed(prepareGate, undefined);
+        yield* Fiber.await(startFiber);
+        yield* Effect.sleep("50 millis");
+
+        const retry = yield* runs.start({ ownerId: "owner-1", runId: "run-1", mode: "success" });
+        expect(retry).toEqual({ runId: "run-1" });
       }).pipe(Effect.provide(WorkflowEngine.layerMemory)),
     { timeout: 5000 },
   );

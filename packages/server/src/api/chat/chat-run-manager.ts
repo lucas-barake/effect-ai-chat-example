@@ -89,6 +89,8 @@ const makeChatRunManager = Effect.gen(function*() {
         userId: payload.chat.userId,
         runId: payload.runId,
       }),
+
+    completedRunTtl: "30 seconds",
   });
 
   return {
